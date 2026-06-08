@@ -11,8 +11,8 @@ usage() {
 Usage: ./Splanner.sh <command>
 
 Commands:
-  setup    First-time setup: update, install dependencies, build, configure UPnP,
-           set admin password, install/restart systemd service.
+  setup    First-time setup: update, install dependencies, build, configure
+           UPnP/Tailscale, set admin password, install/restart systemd service.
   update   Update from git, build, and restart the systemd service without
            changing admin password or setup choices.
 EOF
@@ -42,6 +42,19 @@ ensure_upnpc() {
 
   echo "Installing UPnP client dependency..."
   install_package miniupnpc
+}
+
+ensure_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Installing Tailscale..."
+  if ! command -v curl >/dev/null 2>&1 && ! install_package curl; then
+    echo "curl is required to install Tailscale automatically."
+    return 1
+  fi
+  curl -fsSL https://tailscale.com/install.sh | sh
 }
 
 ensure_cargo() {
@@ -109,6 +122,36 @@ configure_upnp() {
     *)
       printf '127.0.0.1:%s\n' "$APP_PORT" > data/bind_address.txt
       printf 'disabled\n' > data/upnp.txt
+      ;;
+  esac
+}
+
+configure_tailscale() {
+  read -rp "Enable Tailscale remote access for Splanner? [y/N] " enable_tailscale
+  case "$enable_tailscale" in
+    [yY]|[yY][eE][sS])
+      if ! ensure_tailscale; then
+        echo "Skipping Tailscale because it could not be installed."
+        printf 'failed\n' > data/tailscale.txt
+        return
+      fi
+
+      if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl enable --now tailscaled || true
+      fi
+
+      echo "Starting Tailscale login. Follow the URL or browser prompt if shown."
+      if sudo tailscale up; then
+        printf 'enabled\n' > data/tailscale.txt
+        printf '0.0.0.0:%s\n' "$APP_PORT" > data/bind_address.txt
+        echo "Tailscale enabled. Splanner will listen on all interfaces for Tailscale access."
+      else
+        printf 'failed\n' > data/tailscale.txt
+        echo "Tailscale setup failed. You can retry later with: sudo tailscale up"
+      fi
+      ;;
+    *)
+      printf 'disabled\n' > data/tailscale.txt
       ;;
   esac
 }
@@ -194,6 +237,12 @@ print_access_info() {
       echo "Open on your LAN: http://$lan_ip:$APP_PORT/"
     fi
   fi
+  if command -v tailscale >/dev/null 2>&1; then
+    tailscale_ip="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$tailscale_ip" ]]; then
+      echo "Open over Tailscale: http://$tailscale_ip:$APP_PORT/"
+    fi
+  fi
 }
 
 run_setup() {
@@ -201,6 +250,7 @@ run_setup() {
   build_release
   mkdir -p data
   configure_upnp
+  configure_tailscale
   set_admin_password
   install_systemd_service
 

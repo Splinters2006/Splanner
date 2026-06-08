@@ -20,9 +20,10 @@ cargo run
 Open <http://127.0.0.1:8100/> after `cargo run`.
 
 `./Splanner.sh setup` updates from the git repository, installs Rust/Cargo when
-missing, builds the app, optionally requests UPnP router port forwarding, asks
-for the admin password used by the browser UI to add or delete accounts, and
-installs Splanner as a systemd service.
+missing, builds the app, optionally requests UPnP router port forwarding,
+optionally configures Tailscale remote access, asks for the admin password used
+by the browser UI to add or delete accounts, and installs Splanner as a systemd
+service.
 
 Accounts are created from the admin cogwheel. Each account needs a name and
 4 digit PIN. There are no default accounts.
@@ -43,6 +44,11 @@ If UPnP is enabled, setup installs the `upnpc` client when possible, switches
 the app to listen on `0.0.0.0:8100`, and asks the router to forward TCP port
 `8100` to this device. If UPnP is disabled, the app stays local-only on
 `127.0.0.1:8100`.
+
+If Tailscale is enabled, setup installs Tailscale when needed, starts
+`tailscaled`, runs `sudo tailscale up`, switches the app to listen on
+`0.0.0.0:8100`, and prints a Tailscale URL such as
+`http://100.x.y.z:8100/`. Other devices must be on the same Tailnet to use it.
 
 Rerun `./Splanner.sh setup` later only when you want to redo setup choices or
 reset the admin password.

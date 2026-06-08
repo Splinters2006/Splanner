@@ -1701,7 +1701,7 @@ function hostNow() {
 
 function renderClock() {
   const now = hostNow();
-  hostTime.textContent = formatDate(now, { hour: "2-digit", minute: "2-digit" });
+  hostTime.textContent = formatDate(now, { hour: "2-digit", minute: "2-digit", hour12: false });
   hostDate.textContent = formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 
@@ -1879,12 +1879,14 @@ function renderTask(task, index) {
       ? [task.assignee]
       : [];
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
+  const requester = task.requester ? `by: ${task.requester}` : "by: unknown";
   return `
     <article class="task-card" data-tone="${index % 4}">
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
         <span class="chip">${escapeHtml(assignee)}</span>
+        <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="task-actions">
         <button class="delete-task" type="button" data-delete="${task.id}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>
@@ -1953,7 +1955,7 @@ function formatTaskTime(value) {
   const [hour, minute] = value.split(":").map(Number);
   const date = new Date();
   date.setHours(hour, minute || 0, 0, 0);
-  return formatDate(date, { hour: "numeric", minute: "2-digit" });
+  return formatDate(date, { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function loadTasks() {
