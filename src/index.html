@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Splanner</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <section id="login-screen" class="login-screen" aria-label="Sign in">
+    <form id="user-login" class="login-form" autocomplete="off">
+      <h1>Splanner</h1>
+      <label>
+        <span>Name</span>
+        <select id="login-name" name="name" required></select>
+      </label>
+      <label>
+        <span>PIN</span>
+        <input id="login-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" required>
+      </label>
+      <button type="submit">Open planner</button>
+      <button id="login-admin-open" class="plain-button" type="button">Admin settings</button>
+      <p id="login-message" class="admin-message" role="status"></p>
+    </form>
+  </section>
+
+  <main id="app-shell" class="app-shell" hidden>
+    <header class="topbar">
+      <section class="brand-block" aria-label="Current week">
+        <p class="eyebrow">Family planner</p>
+        <h1 id="week-title">This week</h1>
+        <p id="week-range" class="week-range"></p>
+      </section>
+      <section class="clock-panel" aria-label="Host date and time">
+        <time id="host-time" class="host-time">--:--</time>
+        <time id="host-date" class="host-date">Loading date</time>
+      </section>
+      <section class="filter-panel" aria-label="Task filter">
+        <label>
+          <span>Show tasks for</span>
+          <select id="task-filter"></select>
+        </label>
+      </section>
+      <nav class="week-actions" aria-label="Week navigation">
+        <button id="prev-week" class="icon-button" type="button" aria-label="Previous week">&lsaquo;</button>
+        <button id="today" class="text-button" type="button">Today</button>
+        <button id="next-week" class="icon-button" type="button" aria-label="Next week">&rsaquo;</button>
+        <button id="admin-open" class="icon-button secondary admin-cog" type="button" aria-label="Admin settings">&#9881;</button>
+      </nav>
+    </header>
+
+    <section id="broadcast-panel" class="broadcast-panel" aria-label="Family broadcasts">
+      <div id="broadcast-list" class="broadcast-list"></div>
+    </section>
+
+    <section class="planner-stage" aria-label="Weekly planner">
+      <div class="member-rail" id="member-rail" aria-label="Family members"></div>
+      <section id="week-grid" class="week-grid" aria-live="polite"></section>
+    </section>
+
+    <button id="create-open" class="floating-add" type="button" aria-label="Create">+</button>
+
+    <dialog id="create-dialog" class="create-dialog">
+      <header class="dialog-header">
+        <h2>Create</h2>
+        <button id="create-close" class="plain-button" type="button" aria-label="Close create menu">Close</button>
+      </header>
+
+      <label class="create-type-field">
+        <span>Type</span>
+        <select id="create-type">
+          <option value="task">Task</option>
+          <option value="broadcast">Broadcast</option>
+          <option value="event">Event</option>
+        </select>
+      </label>
+
+      <form id="task-form" class="create-form" autocomplete="off">
+        <label>
+          <span>Task name</span>
+          <input id="task-title" name="title" required maxlength="100">
+        </label>
+        <label>
+          <span>By date</span>
+          <select id="task-day" name="day"></select>
+        </label>
+        <label>
+          <span>By hour</span>
+          <input id="task-hour" name="hour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
+        </label>
+        <label>
+          <span>By minute</span>
+          <select id="task-minute" name="minute"></select>
+        </label>
+        <fieldset class="person-field">
+          <legend>For</legend>
+          <div id="task-assignees" class="person-options"></div>
+        </fieldset>
+        <label class="note-field">
+          <span>Note</span>
+          <textarea id="task-note" name="note" maxlength="2000"></textarea>
+        </label>
+        <button type="submit">Add task</button>
+      </form>
+
+      <form id="broadcast-form" class="create-form" autocomplete="off" hidden>
+        <label class="wide-field">
+          <span>Broadcast message</span>
+          <textarea id="broadcast-message" name="message" maxlength="500" required></textarea>
+        </label>
+        <fieldset class="person-field">
+          <legend>To</legend>
+          <div id="broadcast-targets" class="person-options"></div>
+        </fieldset>
+        <button type="submit">Send broadcast</button>
+      </form>
+
+      <form id="event-form" class="create-form" autocomplete="off" hidden>
+        <label>
+          <span>Event name</span>
+          <input id="event-title" name="title" required maxlength="100">
+        </label>
+        <label>
+          <span>Start date</span>
+          <select id="event-start-day" name="startDay"></select>
+        </label>
+        <label>
+          <span>Start hour</span>
+          <input id="event-start-hour" name="startHour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
+        </label>
+        <label>
+          <span>Start minute</span>
+          <select id="event-start-minute" name="startMinute"></select>
+        </label>
+        <label>
+          <span>End date</span>
+          <select id="event-end-day" name="endDay"></select>
+        </label>
+        <label>
+          <span>End hour</span>
+          <input id="event-end-hour" name="endHour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
+        </label>
+        <label>
+          <span>End minute</span>
+          <select id="event-end-minute" name="endMinute"></select>
+        </label>
+        <fieldset class="person-field">
+          <legend>For</legend>
+          <div id="event-assignees" class="person-options"></div>
+        </fieldset>
+        <label class="note-field">
+          <span>Note</span>
+          <textarea id="event-note" name="note" maxlength="2000"></textarea>
+        </label>
+        <button type="submit">Add event</button>
+      </form>
+    </dialog>
+  </main>
+
+  <dialog id="admin-dialog" class="admin-dialog">
+    <form id="admin-login" class="admin-form" autocomplete="off">
+      <header class="dialog-header">
+        <h2>Admin</h2>
+        <button id="admin-close" class="plain-button" value="cancel" formmethod="dialog" type="button" aria-label="Close admin">Close</button>
+      </header>
+      <label>
+        <span>Password</span>
+        <input id="admin-password" name="password" type="password" required>
+      </label>
+      <button type="submit">Log in</button>
+      <p id="admin-message" class="admin-message" role="status"></p>
+    </form>
+
+    <section id="admin-panel" class="admin-panel" hidden>
+      <header class="dialog-header">
+        <h2>Accounts</h2>
+        <button id="admin-logout" class="plain-button" type="button">Log out</button>
+      </header>
+      <form id="account-form" class="admin-form" autocomplete="off">
+        <label>
+          <span>New account</span>
+          <input id="account-name" name="name" maxlength="32" required>
+        </label>
+        <label>
+          <span>PIN</span>
+          <input id="account-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4}" maxlength="4" required>
+        </label>
+        <button type="submit">Add account</button>
+      </form>
+      <div id="account-list" class="account-list"></div>
+
+      <section class="group-admin">
+        <h3>Groups</h3>
+        <form id="group-form" class="admin-form" autocomplete="off">
+          <label>
+            <span>New group</span>
+            <input id="group-name" name="name" maxlength="32" required>
+          </label>
+          <button type="submit">Add group</button>
+        </form>
+        <div id="group-list" class="group-list"></div>
+      </section>
+    </section>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
