@@ -73,6 +73,7 @@ const noteDialog = document.querySelector("#note-dialog");
 const noteDialogTitle = document.querySelector("#note-dialog-title");
 const noteDialogBody = document.querySelector("#note-dialog-body");
 const noteDialogClose = document.querySelector("#note-dialog-close");
+const noteDialogStatus = document.querySelector("#note-dialog-status");
 const noteDialogSave = document.querySelector("#note-dialog-save");
 const noteDialogDelete = document.querySelector("#note-dialog-delete");
 
@@ -972,9 +973,12 @@ function openNoteDialog(kind, id) {
   const canDelete = kind === "event" ? canDeleteEvent(item) : canDeleteTask(item);
   const canEditNote = !state.isViewer && sameName(item.requester, state.currentUser);
   noteDialog.dataset.canEditNote = canEditNote ? "true" : "false";
+  noteDialogStatus.textContent = "";
   noteDialogDelete.hidden = !canDelete;
   noteDialogDelete.textContent = kind === "event" ? "Delete event" : "Delete task";
   noteDialogSave.hidden = !canEditNote;
+  noteDialogSave.disabled = false;
+  noteDialogSave.textContent = "Save note";
   if (noteDialog.open) {
     return;
   }
@@ -1001,10 +1005,16 @@ async function saveOpenDetailNote() {
   const id = noteDialog.dataset.detailId;
   const noteInput = noteDialog.querySelector("#note-edit-text");
   if (!kind || !id || !noteInput) return;
+  noteDialogSave.disabled = true;
+  noteDialogSave.textContent = "Saving...";
+  noteDialogStatus.textContent = "Saving...";
   const response = kind === "event"
     ? await apiPost("/api/events/note", { id, requester: state.currentUser, note: noteInput.value })
     : await apiPost("/api/tasks/note", { id, requester: state.currentUser, note: noteInput.value });
   if (!response.ok) {
+    noteDialogSave.disabled = false;
+    noteDialogSave.textContent = "Save note";
+    noteDialogStatus.textContent = "";
     alert(response.error || `Could not save ${kind} note`);
     return;
   }
@@ -1013,7 +1023,9 @@ async function saveOpenDetailNote() {
   } else {
     state.tasks = normalizeTasks(response.tasks);
   }
-  closeNoteDialog();
+  noteDialogSave.textContent = "Saved";
+  noteDialogStatus.textContent = "Saved";
+  setTimeout(() => closeNoteDialog(), 450);
   render();
 }
 
