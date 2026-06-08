@@ -10,6 +10,7 @@ const BIND_ADDRESS_FILE: &str = "data/bind_address.txt";
 const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const GROUPS_FILE: &str = "data/groups.txt";
+const TASKS_FILE: &str = "data/tasks.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
 const OVERVIEW_ACCOUNT: &str = "overview";
 
@@ -23,6 +24,18 @@ struct Account {
 struct Group {
     name: String,
     members: Vec<String>,
+}
+
+#[derive(Clone)]
+struct Task {
+    id: String,
+    title: String,
+    date: String,
+    time: String,
+    assignees: Vec<String>,
+    requester: String,
+    created_at: String,
+    note: String,
 }
 
 fn main() -> std::io::Result<()> {
@@ -43,12 +56,14 @@ fn main() -> std::io::Result<()> {
         set_admin_password(password)?;
         ensure_accounts_file()?;
         ensure_groups_file()?;
+        ensure_tasks_file()?;
         println!("Admin password saved.");
         return Ok(());
     }
 
     ensure_accounts_file()?;
     ensure_groups_file()?;
+    ensure_tasks_file()?;
     let address = read_bind_address();
     let listener = TcpListener::bind(&address)?;
     println!("Splanner is running at http://{address}");
@@ -98,6 +113,11 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "application/json; charset=utf-8",
             host_time_json(),
         ),
+        ("GET", "/api/tasks") => (
+            "200 OK",
+            "application/json; charset=utf-8",
+            tasks_json(&read_tasks()),
+        ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
         ("POST", "/api/user/login") => handle_user_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
@@ -105,6 +125,8 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         ("POST", "/api/groups") => handle_add_group(&parsed.body),
         ("POST", "/api/groups/delete") => handle_delete_group(&parsed.body),
         ("POST", "/api/groups/member") => handle_group_member(&parsed.body),
+        ("POST", "/api/tasks") => handle_add_task(&parsed.body),
+        ("POST", "/api/tasks/delete") => handle_delete_task(&parsed.body),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -389,6 +411,78 @@ fn handle_user_login(body: &str) -> (&'static str, &'static str, String) {
     }
 }
 
+
+fn handle_add_task(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let title = sanitize_task_text(&json_field(body, "title").unwrap_or_default(), 100);
+    let date = json_field(body, "date").unwrap_or_default();
+    let time = json_field(body, "time").unwrap_or_default();
+    let created_at = sanitize_task_text(&json_field(body, "createdAt").unwrap_or_default(), 40);
+    let note = sanitize_note_text(&json_field(body, "note").unwrap_or_default(), 2000);
+    let assignees = parse_assignees_field(&json_field(body, "assignees").unwrap_or_default());
+
+    if title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time) {
+        return json_response("400 Bad Request", r#"{"ok":false,"error":"Invalid task"}"#);
+    }
+
+    let mut tasks = read_tasks();
+    tasks.push(Task {
+        id: create_server_id(),
+        title,
+        date,
+        time,
+        assignees,
+        requester,
+        created_at,
+        note,
+    });
+
+    if let Err(error) = write_tasks(&tasks) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"tasks":{}}}"#, tasks_json(&tasks)),
+    )
+}
+
+fn handle_delete_task(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 100);
+    let groups = read_groups();
+    let tasks = read_tasks();
+    let Some(task) = tasks.iter().find(|task| task.id == id) else {
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown task"}"#);
+    };
+
+    if !can_delete_task(task, &requester, &groups) {
+        return json_response("403 Forbidden", r#"{"ok":false,"error":"Not allowed to delete this task"}"#);
+    }
+
+    let remaining = tasks
+        .into_iter()
+        .filter(|task| task.id != id)
+        .collect::<Vec<_>>();
+
+    if let Err(error) = write_tasks(&remaining) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"tasks":{}}}"#, tasks_json(&remaining)),
+    )
+}
+
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
 }
@@ -458,6 +552,14 @@ fn ensure_groups_file() -> std::io::Result<()> {
     ensure_data_dir()?;
     if !Path::new(GROUPS_FILE).exists() {
         fs::write(GROUPS_FILE, "")?;
+    }
+    Ok(())
+}
+
+fn ensure_tasks_file() -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if !Path::new(TASKS_FILE).exists() {
+        fs::write(TASKS_FILE, "")?;
     }
     Ok(())
 }
@@ -570,6 +672,203 @@ fn parse_group_line(line: &str, accounts: &[Account]) -> Option<Group> {
             list
         });
     Some(Group { name, members })
+}
+
+
+fn read_tasks() -> Vec<Task> {
+    fs::read_to_string(TASKS_FILE)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(parse_task_line)
+        .collect()
+}
+
+fn write_tasks(tasks: &[Task]) -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if Path::new(TASKS_FILE).exists() {
+        let _ = fs::copy(TASKS_FILE, "data/tasks.backup.txt");
+    }
+    let body = tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                task.id,
+                task.title,
+                task.date,
+                task.time,
+                task.assignees.join(","),
+                task.requester,
+                task.created_at,
+                task.note
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        TASKS_FILE,
+        if body.is_empty() {
+            body
+        } else {
+            format!("{body}\n")
+        },
+    )
+}
+
+fn parse_task_line(line: &str) -> Option<Task> {
+    let parts = line.split('\t').collect::<Vec<_>>();
+    if parts.len() != 7 && parts.len() != 8 {
+        return None;
+    }
+    let id = sanitize_task_text(parts[0], 100);
+    let title = sanitize_task_text(parts[1], 100);
+    let date = parts[2].to_string();
+    let time = parts[3].to_string();
+    let assignees = parse_assignees_field(parts[4]);
+    let requester = sanitize_account_name(parts[5]);
+    let created_at = sanitize_task_text(parts[6], 40);
+    let note = parts.get(7).map(|value| sanitize_note_text(value, 2000)).unwrap_or_default();
+
+    if id.is_empty() || title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time) {
+        None
+    } else {
+        Some(Task {
+            id,
+            title,
+            date,
+            time,
+            assignees,
+            requester,
+            created_at,
+            note,
+        })
+    }
+}
+
+fn tasks_json(tasks: &[Task]) -> String {
+    format!(
+        "[{}]",
+        tasks
+            .iter()
+            .map(|task| {
+                format!(
+                    r#"{{"id":"{}","title":"{}","date":"{}","time":"{}","assignees":{},"requester":"{}","createdAt":"{}","note":"{}"}}"#,
+                    escape_json(&task.id),
+                    escape_json(&task.title),
+                    escape_json(&task.date),
+                    escape_json(&task.time),
+                    string_array_json(&task.assignees),
+                    escape_json(&task.requester),
+                    escape_json(&task.created_at),
+                    escape_json(&task.note)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn parse_assignees_field(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|name| {
+            if let Some(group_name) = name.trim().strip_prefix('@') {
+                format!("@{}", sanitize_account_name(group_name))
+            } else {
+                sanitize_account_name(name)
+            }
+        })
+        .filter(|name| !name.is_empty() && name != "@")
+        .fold(Vec::<String>::new(), |mut list, name| {
+            if !list.iter().any(|existing| same_name(existing, &name)) {
+                list.push(name);
+            }
+            list
+        })
+}
+
+fn sanitize_task_text(value: &str, max_len: usize) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|character| !matches!(character, '\t' | '\n' | '\r'))
+        .take(max_len)
+        .collect()
+}
+
+fn sanitize_note_text(value: &str, max_len: usize) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|character| if matches!(character, '\t' | '\n' | '\r') { ' ' } else { character })
+        .take(max_len)
+        .collect()
+}
+
+fn is_valid_task_requester(name: &str) -> bool {
+    is_overview_account(name)
+        || read_accounts()
+            .iter()
+            .any(|account| same_name(&account.name, name))
+}
+
+fn is_valid_date_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
+fn is_valid_time_value(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let Some((hour, minute)) = value.split_once(':') else {
+        return false;
+    };
+    let Ok(hour) = hour.parse::<u8>() else {
+        return false;
+    };
+    let Ok(minute) = minute.parse::<u8>() else {
+        return false;
+    };
+    hour < 24 && minute < 60
+}
+
+fn create_server_id() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("task-{now}")
+}
+
+fn can_delete_task(task: &Task, requester: &str, groups: &[Group]) -> bool {
+    if same_name(&task.requester, requester) {
+        return true;
+    }
+    if task.assignees.is_empty() {
+        return true;
+    }
+    task.assignees.iter().any(|assignee| {
+        if let Some(group_name) = assignee.strip_prefix('@') {
+            is_member_of_group(requester, group_name, groups)
+        } else {
+            same_name(assignee, requester)
+        }
+    })
+}
+
+fn is_member_of_group(account_name: &str, group_name: &str, groups: &[Group]) -> bool {
+    groups
+        .iter()
+        .find(|group| same_name(&group.name, group_name))
+        .map(|group| group.members.iter().any(|member| same_name(member, account_name)))
+        .unwrap_or(false)
 }
 
 fn remove_account_from_groups(account_name: &str) {
@@ -725,6 +1024,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button id="next-week" class="icon-button" type="button" aria-label="Next week">&rsaquo;</button>
         <button id="admin-open" class="icon-button secondary admin-cog" type="button" aria-label="Admin settings">&#9881;</button>
       </nav>
+      <section class="filter-panel" aria-label="Task filter">
+        <label>
+          <span>Show tasks for</span>
+          <select id="task-filter"></select>
+        </label>
+      </section>
     </header>
 
     <section class="planner-stage" aria-label="Weekly planner">
@@ -744,7 +1049,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </label>
         <label>
           <span>Hour</span>
-          <select id="task-hour" name="hour"></select>
+          <input id="task-hour" name="hour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2" placeholder="HH">
         </label>
         <label>
           <span>Minute</span>
@@ -754,6 +1059,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <legend>For</legend>
           <div id="task-assignees" class="person-options"></div>
         </fieldset>
+        <label class="note-field">
+          <span>Note</span>
+          <textarea id="task-note" name="note" maxlength="2000" placeholder="Recipe, instructions, link..."></textarea>
+        </label>
         <button type="submit">Add</button>
       </form>
     </aside>
@@ -1365,6 +1674,89 @@ select {
   margin-top: 10px;
 }
 
+
+
+.filter-panel {
+  min-width: min(260px, 100%);
+}
+
+.filter-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.member.current-member {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 111, 99, 0.22), var(--shadow);
+}
+
+.note-field {
+  grid-column: 1 / -1;
+}
+
+textarea {
+  width: 100%;
+  min-height: 84px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+  color: var(--ink);
+  padding: 10px 12px;
+  resize: vertical;
+  font: inherit;
+}
+
+.task-card {
+  min-width: 0;
+  height: auto;
+}
+
+.task-card.has-note {
+  cursor: default;
+}
+
+.task-meta,
+.task-actions {
+  min-width: 0;
+}
+
+.chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.task-actions {
+  gap: 8px;
+}
+
+.note-toggle {
+  min-width: 38px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: #edf1ef;
+  color: var(--ink);
+  font-size: 1.1rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.task-note-panel {
+  border-radius: 8px;
+  background: #eef3ef;
+  color: var(--ink);
+  padding: 10px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.task-note-panel a {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     gap: 14px;
@@ -1377,7 +1769,8 @@ select {
     align-items: end;
   }
 
-  .week-actions {
+  .week-actions,
+  .filter-panel {
     grid-column: 1 / -1;
   }
 
@@ -1456,12 +1849,12 @@ select {
 }
 "#;
 
-const APP_JS: &str = r##"const STORAGE_KEY = "splanner.tasks.v1";
+const APP_JS: &str = r##"const LEGACY_STORAGE_KEY = "splanner.tasks.v1";
 const ACCOUNT_COLORS = ["#2f6f63", "#4b7fb8", "#d75b62", "#f1b84b", "#7a6fbe", "#bf6b45"];
 
 const state = {
   weekStart: startOfWeek(new Date()),
-  tasks: loadTasks(),
+  tasks: [],
   accounts: [],
   groups: [],
   adminPassword: "",
@@ -1469,6 +1862,7 @@ const state = {
   isViewer: false,
   hostClockOffsetMs: 0,
   overviewResetTimer: null,
+  taskFilter: sessionStorage.getItem("splanner.taskFilter") || "all",
 };
 
 const loginScreen = document.querySelector("#login-screen");
@@ -1485,6 +1879,8 @@ const hostDate = document.querySelector("#host-date");
 const taskDay = document.querySelector("#task-day");
 const taskHour = document.querySelector("#task-hour");
 const taskMinute = document.querySelector("#task-minute");
+const taskNote = document.querySelector("#task-note");
+const taskFilter = document.querySelector("#task-filter");
 const taskAssignees = document.querySelector("#task-assignees");
 const form = document.querySelector("#task-form");
 const memberRail = document.querySelector("#member-rail");
@@ -1516,6 +1912,7 @@ userLogin.addEventListener("submit", async (event) => {
   sessionStorage.setItem("splanner.currentUser", state.currentUser);
   loginPin.value = "";
   loginMessage.textContent = "";
+  await loadTasks();
   showPlanner();
 });
 
@@ -1527,13 +1924,15 @@ document.querySelector("#today").addEventListener("click", () => {
   render();
 });
 
-document.querySelector("#admin-open").addEventListener("click", () => {
-  openAdmin();
+taskFilter.addEventListener("change", () => {
+  state.taskFilter = taskFilter.value || "all";
+  sessionStorage.setItem("splanner.taskFilter", state.taskFilter);
+  markOverviewInteraction();
+  renderWeekGrid();
 });
 
-document.querySelector("#login-admin-open").addEventListener("click", () => {
-  openAdmin();
-});
+document.querySelector("#admin-open").addEventListener("click", () => openAdmin());
+document.querySelector("#login-admin-open").addEventListener("click", () => openAdmin());
 
 document.addEventListener("keydown", (event) => {
   const target = event.target;
@@ -1662,36 +2061,55 @@ groupList.addEventListener("click", async (event) => {
   await loadGroups(response.groups);
 });
 
-form.addEventListener("submit", (event) => {
+form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (state.isViewer) return;
   const data = new FormData(form);
-  const title = data.get("title").trim();
+  const title = String(data.get("title") || "").trim();
   if (!title) return;
+  const time = selectedTimeValue();
+  if (time === null) return;
 
-  state.tasks.push({
-    id: createId(),
+  const response = await apiPost("/api/tasks", {
     title,
     date: data.get("day"),
-    time: selectedTimeValue(),
-    assignees: getSelectedAssignees(),
+    time,
+    assignees: getSelectedAssignees().join(","),
     requester: state.currentUser,
     createdAt: new Date().toISOString(),
+    note: String(data.get("note") || "").trim(),
   });
+  if (!response.ok) {
+    alert(response.error || "Could not add task");
+    return;
+  }
+  state.tasks = normalizeTasks(response.tasks);
 
-  saveTasks();
   form.reset();
   taskDay.value = toDateKey(hostNow());
   setDefaultTaskTime();
   render();
 });
 
-grid.addEventListener("click", (event) => {
-  if (state.isViewer) return;
+grid.addEventListener("click", async (event) => {
+  const noteButton = event.target.closest("[data-note-toggle]");
+  if (noteButton) {
+    const panel = document.querySelector(`#${CSS.escape(noteButton.dataset.noteToggle)}`);
+    if (panel) panel.hidden = !panel.hidden;
+    return;
+  }
+
   const button = event.target.closest("[data-delete]");
   if (!button) return;
-  state.tasks = state.tasks.filter((task) => task.id !== button.dataset.delete);
-  saveTasks();
+  const response = await apiPost("/api/tasks/delete", {
+    id: button.dataset.delete,
+    requester: state.currentUser,
+  });
+  if (!response.ok) {
+    alert(response.error || "You cannot delete this task");
+    return;
+  }
+  state.tasks = normalizeTasks(response.tasks);
   render();
 });
 
@@ -1711,16 +2129,16 @@ grid.addEventListener("pointerup", (event) => {
 });
 
 async function init() {
-  renderTimeSelectors();
-  setDefaultTaskTime();
   renderClock();
   await syncHostTime();
   state.weekStart = startOfWeek(hostNow());
   renderClock();
   setInterval(renderClock, 1000);
   setInterval(syncHostTime, 5 * 60 * 1000);
+  renderTimeSelectors();
   await loadAccounts();
   await loadGroups();
+  await loadTasks();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
     state.isViewer = isViewerAccount(state.currentUser);
     showPlanner();
@@ -1730,10 +2148,47 @@ async function init() {
   render();
 }
 
+async function loadTasks() {
+  try {
+    state.tasks = normalizeTasks(await fetch("/api/tasks").then((response) => response.json()));
+    if (!state.tasks.length) {
+      await migrateLegacyTasks();
+    }
+  } catch {
+    state.tasks = [];
+  }
+  renderWeekGrid();
+}
+
+async function migrateLegacyTasks() {
+  let legacyTasks = [];
+  try {
+    legacyTasks = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "[]") || [];
+  } catch {
+    legacyTasks = [];
+  }
+  if (!legacyTasks.length) return;
+
+  for (const task of legacyTasks) {
+    await apiPost("/api/tasks", {
+      title: task.title || "Untitled",
+      date: task.date || toDateKey(hostNow()),
+      time: task.time || "",
+      assignees: normalizeAssignees(task).join(","),
+      requester: task.requester && !isViewerAccount(task.requester) ? task.requester : state.currentUser,
+      createdAt: task.createdAt || new Date().toISOString(),
+      note: task.note || task.notes || "",
+    });
+  }
+  state.tasks = normalizeTasks(await fetch("/api/tasks").then((response) => response.json()));
+  localStorage.setItem(`${LEGACY_STORAGE_KEY}.migrated`, new Date().toISOString());
+}
+
 async function loadGroups(groups = null) {
   state.groups = groups || await fetch("/api/groups").then((response) => response.json());
   renderGroupControls();
   renderPersonOptions();
+  renderTaskFilter();
   renderWeekGrid();
 }
 
@@ -1769,6 +2224,7 @@ async function loadAccounts(accounts = null) {
   renderAccountControls();
   renderGroupControls();
   renderPersonOptions();
+  renderTaskFilter();
   renderWeekGrid();
 }
 
@@ -1777,6 +2233,7 @@ function render() {
   renderWeekHeading();
   renderDayOptions();
   renderPersonOptions();
+  renderTaskFilter();
   renderWeekGrid();
   renderAccountControls();
   renderGroupControls();
@@ -1791,9 +2248,7 @@ function showLogin() {
 function showPlanner() {
   state.isViewer = isViewerAccount(state.currentUser);
   appShell.classList.toggle("viewer-mode", state.isViewer);
-  if (state.isViewer) {
-    state.weekStart = startOfWeek(hostNow());
-  }
+  loginScreen.hidden = false;
   loginScreen.hidden = true;
   appShell.hidden = false;
   render();
@@ -1821,8 +2276,8 @@ function renderLoginOptions() {
 
 function renderMembers() {
   memberRail.innerHTML = taskAccounts().map((name, index) => `
-    <article class="member">
-      <span class="avatar" style="background:${ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]}">${name.slice(0, 1)}</span>
+    <article class="member ${sameName(name, state.currentUser) ? "current-member" : ""}">
+      <span class="avatar" style="background:${ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]}">${escapeHtml(name.slice(0, 1))}</span>
       <strong>${escapeHtml(name)}</strong>
     </article>
   `).join("");
@@ -1883,6 +2338,29 @@ function renderPersonOptions() {
     : `<span class="chip">No accounts or groups yet</span>`;
 }
 
+function renderTaskFilter() {
+  const options = [{ value: "all", label: "Everyone" }];
+  if (!state.isViewer && state.currentUser) {
+    options.push({ value: `person:${state.currentUser}`, label: state.currentUser });
+  }
+  if (state.isViewer) {
+    taskAccounts().forEach((name) => options.push({ value: `person:${name}`, label: name }));
+    state.groups.forEach((group) => options.push({ value: `group:${group.name}`, label: group.name }));
+  } else {
+    state.groups
+      .filter((group) => group.members.some((member) => sameName(member, state.currentUser)))
+      .forEach((group) => options.push({ value: `group:${group.name}`, label: group.name }));
+  }
+
+  if (!options.some((option) => option.value === state.taskFilter)) {
+    state.taskFilter = "all";
+  }
+  taskFilter.innerHTML = options.map((option) => `
+    <option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>
+  `).join("");
+  taskFilter.value = state.taskFilter;
+}
+
 function getSelectedAssignees() {
   return Array.from(taskAssignees.querySelectorAll("input:checked")).map((input) => input.value);
 }
@@ -1914,6 +2392,7 @@ function renderWeekGrid() {
     const key = toDateKey(day);
     const tasks = state.tasks
       .filter((task) => task.date === key)
+      .filter(taskMatchesCurrentFilter)
       .sort(sortTasks);
     return `
       <article class="day-column">
@@ -1936,15 +2415,14 @@ function renderWeekGrid() {
 }
 
 function renderTask(task, index) {
-  const assignees = Array.isArray(task.assignees)
-    ? task.assignees
-    : task.assignee
-      ? [task.assignee]
-      : [];
+  const assignees = normalizeAssignees(task);
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = task.requester ? `by: ${task.requester}` : "by: unknown";
+  const note = String(task.note || task.notes || "").trim();
+  const noteId = `task-note-${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const canDelete = canDeleteTask(task);
   return `
-    <article class="task-card" data-tone="${index % 4}">
+    <article class="task-card ${note ? "has-note" : ""}" data-tone="${index % 4}">
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
@@ -1952,17 +2430,54 @@ function renderTask(task, index) {
         <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="task-actions">
-        <button class="delete-task" type="button" data-delete="${task.id}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>
+        <button class="note-toggle" type="button" data-note-toggle="${escapeHtml(noteId)}" aria-label="Show note for ${escapeHtml(task.title)}">&#8942;</button>
+        ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
+      <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : "No note added."}</div>
     </article>
   `;
+}
+
+function taskMatchesCurrentFilter(task) {
+  const filter = state.taskFilter || "all";
+  if (filter === "all") return true;
+  const assignees = normalizeAssignees(task);
+  if (filter.startsWith("person:")) {
+    const person = filter.slice("person:".length);
+    return taskAppliesToPerson(task, person);
+  }
+  if (filter.startsWith("group:")) {
+    const group = filter.slice("group:".length);
+    return assignees.some((assignee) => sameName(assignee, `@${group}`));
+  }
+  return true;
+}
+
+function taskAppliesToPerson(task, person) {
+  const assignees = normalizeAssignees(task);
+  if (!assignees.length) return true;
+  return assignees.some((assignee) => {
+    if (assignee.startsWith("@")) {
+      const group = state.groups.find((candidate) => sameName(candidate.name, assignee.slice(1)));
+      return group ? group.members.some((member) => sameName(member, person)) : false;
+    }
+    return sameName(assignee, person);
+  });
+}
+
+function canDeleteTask(task) {
+  if (state.isViewer || !state.currentUser) return false;
+  if (sameName(task.requester, state.currentUser)) return true;
+  const assignees = normalizeAssignees(task);
+  if (!assignees.length) return true;
+  return taskAppliesToPerson(task, state.currentUser);
 }
 
 function sortTasks(a, b) {
   if (a.time && b.time && a.time !== b.time) return a.time.localeCompare(b.time);
   if (a.time && !b.time) return -1;
   if (!a.time && b.time) return 1;
-  return a.createdAt.localeCompare(b.createdAt);
+  return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
 }
 
 async function apiPost(url, payload) {
@@ -1994,11 +2509,7 @@ function markOverviewInteraction() {
 }
 
 function renderTimeSelectors() {
-  if (!taskHour || !taskMinute) return;
-  taskHour.innerHTML = `<option value="">--</option>${Array.from({ length: 24 }, (_, hour) => {
-    const value = String(hour).padStart(2, "0");
-    return `<option value="${value}">${value}</option>`;
-  }).join("")}`;
+  if (!taskMinute) return;
   taskMinute.innerHTML = Array.from({ length: 12 }, (_, index) => {
     const value = String(index * 5).padStart(2, "0");
     return `<option value="${value}">${value}</option>`;
@@ -2006,14 +2517,27 @@ function renderTimeSelectors() {
 }
 
 function selectedTimeValue() {
-  if (!taskHour || !taskMinute || !taskHour.value) return "";
-  return `${taskHour.value}:${taskMinute.value || "00"}`;
+  if (!taskHour || !taskMinute) return "";
+  const rawHour = taskHour.value.trim();
+  if (!rawHour) return "";
+  if (!/^\d{1,2}$/.test(rawHour)) {
+    alert("Use an hour between 0 and 23.");
+    taskHour.focus();
+    return null;
+  }
+  const hour = Number(rawHour);
+  if (hour < 0 || hour > 23) {
+    alert("Use an hour between 0 and 23.");
+    taskHour.focus();
+    return null;
+  }
+  return `${String(hour).padStart(2, "0")}:${taskMinute.value || "00"}`;
 }
 
 function setDefaultTaskTime() {
-  if (!taskHour || !taskMinute) return;
-  taskHour.value = "";
-  taskMinute.value = "00";
+  if (taskHour) taskHour.value = "";
+  if (taskMinute) taskMinute.value = "00";
+  if (taskNote) taskNote.value = "";
 }
 
 function getWeekDays() {
@@ -2046,33 +2570,34 @@ function formatDate(date, options) {
 }
 
 function formatTaskTime(value) {
-  const [hour, minute] = value.split(":").map(Number);
+  const [hour, minute] = String(value).split(":").map(Number);
   const date = new Date();
   date.setHours(hour, minute || 0, 0, 0);
   return formatDate(date, { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function loadTasks() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || seedTasks();
-  } catch {
-    return seedTasks();
-  }
+function normalizeTasks(tasks) {
+  return Array.isArray(tasks) ? tasks.map((task) => ({
+    ...task,
+    assignees: normalizeAssignees(task),
+    note: task.note || task.notes || "",
+  })) : [];
 }
 
-function saveTasks() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
-}
-
-function createId() {
-  if (window.crypto && typeof window.crypto.randomUUID === "function") {
-    return window.crypto.randomUUID();
-  }
-  return `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function seedTasks() {
+function normalizeAssignees(task) {
+  if (Array.isArray(task.assignees)) return task.assignees;
+  if (typeof task.assignees === "string") return task.assignees.split(",").map((item) => item.trim()).filter(Boolean);
+  if (task.assignee) return [task.assignee];
   return [];
+}
+
+function linkifyNote(value) {
+  const escaped = escapeHtml(value);
+  return escaped.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+function sameName(left, right) {
+  return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
 }
 
 function escapeHtml(value) {
