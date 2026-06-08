@@ -188,15 +188,15 @@ fn handle_add_account(body: &str) -> (&'static str, &'static str, String) {
             name,
             pin_hash: password_hash(&pin),
         });
-        if let Err(error) = write_accounts(&accounts) {
-            return json_response(
-                "500 Internal Server Error",
-                &format!(
-                    r#"{{"ok":false,"error":"{}"}}"#,
-                    escape_json(&error.to_string())
-                ),
-            );
-        }
+    }
+    if let Err(error) = write_accounts(&accounts) {
+        return json_response(
+            "500 Internal Server Error",
+            &format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                escape_json(&error.to_string())
+            ),
+        );
     }
 
     json_response(
@@ -321,10 +321,7 @@ fn handle_group_member(body: &str) -> (&'static str, &'static str, String) {
         .iter_mut()
         .find(|group| same_name(&group.name, &group_name))
     else {
-        return json_response(
-            "404 Not Found",
-            r#"{"ok":false,"error":"Unknown group"}"#,
-        );
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown group"}"#);
     };
 
     if action == "remove" {
@@ -549,7 +546,9 @@ fn parse_group_line(line: &str, accounts: &[Account]) -> Option<Group> {
 fn remove_account_from_groups(account_name: &str) {
     let mut groups = read_groups();
     for group in &mut groups {
-        group.members.retain(|member| !same_name(member, account_name));
+        group
+            .members
+            .retain(|member| !same_name(member, account_name));
     }
     if let Err(error) = write_groups(&groups) {
         eprintln!("failed to update groups: {error}");
@@ -1382,6 +1381,7 @@ const state = {
   weekStart: startOfWeek(new Date()),
   tasks: loadTasks(),
   accounts: [],
+  groups: [],
   adminPassword: "",
   currentUser: sessionStorage.getItem("splanner.currentUser") || "",
   hostClockOffsetMs: 0,
@@ -1412,6 +1412,9 @@ const accountForm = document.querySelector("#account-form");
 const accountName = document.querySelector("#account-name");
 const accountPin = document.querySelector("#account-pin");
 const accountList = document.querySelector("#account-list");
+const groupForm = document.querySelector("#group-form");
+const groupName = document.querySelector("#group-name");
+const groupList = document.querySelector("#group-list");
 
 userLogin.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1496,6 +1499,7 @@ accountForm.addEventListener("submit", async (event) => {
   accountName.value = "";
   accountPin.value = "";
   await loadAccounts(response.accounts);
+  await loadGroups();
 });
 
 accountList.addEventListener("click", async (event) => {
@@ -1510,6 +1514,51 @@ accountList.addEventListener("click", async (event) => {
     return;
   }
   await loadAccounts(response.accounts);
+  await loadGroups();
+});
+
+groupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const response = await apiPost("/api/groups", {
+    password: state.adminPassword,
+    name: groupName.value,
+  });
+  if (!response.ok) {
+    adminMessage.textContent = response.error || "Could not add group";
+    return;
+  }
+  groupName.value = "";
+  await loadGroups(response.groups);
+});
+
+groupList.addEventListener("click", async (event) => {
+  const deleteButton = event.target.closest("[data-group-delete]");
+  if (deleteButton) {
+    const response = await apiPost("/api/groups/delete", {
+      password: state.adminPassword,
+      name: deleteButton.dataset.groupDelete,
+    });
+    if (!response.ok) {
+      adminMessage.textContent = response.error || "Could not delete group";
+      return;
+    }
+    await loadGroups(response.groups);
+    return;
+  }
+
+  const memberButton = event.target.closest("[data-group-member]");
+  if (!memberButton) return;
+  const response = await apiPost("/api/groups/member", {
+    password: state.adminPassword,
+    group: memberButton.dataset.groupName,
+    member: memberButton.dataset.groupMember,
+    action: memberButton.dataset.groupAction,
+  });
+  if (!response.ok) {
+    adminMessage.textContent = response.error || "Could not update group";
+    return;
+  }
+  await loadGroups(response.groups);
 });
 
 form.addEventListener("submit", (event) => {
@@ -1564,12 +1613,20 @@ async function init() {
   setInterval(renderClock, 1000);
   setInterval(syncHostTime, 5 * 60 * 1000);
   await loadAccounts();
+  await loadGroups();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
     showPlanner();
   } else {
     showLogin();
   }
   render();
+}
+
+async function loadGroups(groups = null) {
+  state.groups = groups || await fetch("/api/groups").then((response) => response.json());
+  renderGroupControls();
+  renderPersonOptions();
+  renderWeekGrid();
 }
 
 async function syncHostTime() {
@@ -1601,18 +1658,19 @@ async function loadAccounts(accounts = null) {
   renderLoginOptions();
   renderMembers();
   renderAccountControls();
+  renderGroupControls();
   renderPersonOptions();
   renderWeekGrid();
 }
 
 function render() {
-  currentUserLabel.textContent = state.currentUser || "Nobody";
   renderMembers();
   renderWeekHeading();
   renderDayOptions();
   renderPersonOptions();
   renderWeekGrid();
   renderAccountControls();
+  renderGroupControls();
 }
 
 function showLogin() {
@@ -1652,15 +1710,48 @@ function renderAccountControls() {
   `).join("");
 }
 
+function renderGroupControls() {
+  groupList.innerHTML = state.groups.length
+    ? state.groups.map((group) => `
+      <article class="group-row">
+        <header>
+          <strong>${escapeHtml(group.name)}</strong>
+          <button type="button" data-group-delete="${escapeHtml(group.name)}">Delete</button>
+        </header>
+        <div class="group-members">
+          ${state.accounts.map((name) => {
+            const isMember = group.members.includes(name);
+            return `
+              <button type="button"
+                data-group-name="${escapeHtml(group.name)}"
+                data-group-member="${escapeHtml(name)}"
+                data-group-action="${isMember ? "remove" : "add"}">
+                ${isMember ? "Remove" : "Add"} ${escapeHtml(name)}
+              </button>
+            `;
+          }).join("")}
+        </div>
+      </article>
+    `).join("")
+    : `<div class="empty-day">No groups yet</div>`;
+}
+
 function renderPersonOptions() {
-  taskAssignees.innerHTML = state.accounts.length
-    ? state.accounts.map((name) => `
+  const personOptions = state.accounts.map((name) => `
       <label class="person-option">
         <input type="checkbox" value="${escapeHtml(name)}">
         <span>${escapeHtml(name)}</span>
       </label>
-    `).join("")
-    : `<span class="chip">No accounts yet</span>`;
+    `).join("");
+  const groupOptions = state.groups.map((group) => `
+      <label class="person-option">
+        <input type="checkbox" value="@${escapeHtml(group.name)}">
+        <span>${escapeHtml(group.name)}</span>
+      </label>
+    `).join("");
+  taskAssignees.innerHTML = personOptions || groupOptions
+    ? `${personOptions}${groupOptions}`
+    : `<span class="chip">No accounts or groups yet</span>`;
 }
 
 function getSelectedAssignees() {
@@ -1716,13 +1807,11 @@ function renderTask(task, index) {
       ? [task.assignee]
       : [];
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
-  const requester = task.requester ? `Asked by ${task.requester}` : "Family task";
   return `
     <article class="task-card" data-tone="${index % 4}">
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         <span class="chip">${escapeHtml(assignee)}</span>
-        <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="task-actions">
         <button class="delete-task" type="button" data-delete="${task.id}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>

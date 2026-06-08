@@ -4,8 +4,7 @@ A touch-friendly family weekly planner for a living-room tablet.
 
 The app runs as a small local Rust web server and stores planner items in the
 browser's local storage. Everyone signs in with their account name and 4 digit
-PIN, can add tasks, assign tasks to one or more people, and records who asked
-for the task.
+PIN, can add tasks, and can assign tasks to one or more people or groups.
 
 ## Development
 
@@ -26,6 +25,10 @@ installs Splanner as a systemd service.
 
 Accounts are created from the admin cogwheel. Each account needs a name and
 4 digit PIN. There are no default accounts.
+
+Groups are also managed from the admin cogwheel. Admins can create groups and
+add or remove people from them. Groups appear next to people when assigning a
+task.
 
 `./Splanner.sh update` pulls the latest git changes, rebuilds the release
 binary, and restarts the systemd service without repeating the admin password or
