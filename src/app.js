@@ -46,6 +46,7 @@ const eventEndHour = document.querySelector("#event-end-hour");
 const eventEndMinute = document.querySelector("#event-end-minute");
 const eventAssignees = document.querySelector("#event-assignees");
 const eventNote = document.querySelector("#event-note");
+const eventHidden = document.querySelector("#event-hidden");
 const createOpen = document.querySelector("#create-open");
 const createDialog = document.querySelector("#create-dialog");
 const createClose = document.querySelector("#create-close");
@@ -373,6 +374,7 @@ eventForm.addEventListener("submit", async (event) => {
     requester: state.currentUser,
     createdAt: new Date().toISOString(),
     note: String(data.get("note") || "").trim(),
+    hidden: eventHidden && eventHidden.checked ? "true" : "false",
   });
   if (!response.ok) {
     alert(response.error || "Could not add event");
@@ -841,8 +843,8 @@ function renderBroadcast(broadcast) {
 }
 
 function visibleBroadcasts() {
+  if (state.isViewer) return [];
   return state.broadcasts.filter((broadcast) => {
-    if (state.isViewer) return !broadcastIsComplete(broadcast);
     return broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
   });
 }
@@ -874,6 +876,7 @@ function renderWeekGrid() {
     const untimedTasks = tasks.filter((task) => !task.time);
     const events = state.events
       .filter((event) => eventOverlapsDay(event, key))
+      .filter(eventVisibleToCurrentUser)
       .filter(eventMatchesCurrentFilter)
       .sort(sortEvents);
     const untimedTasksHtml = untimedTasks.map(renderTask).join("");
@@ -1163,6 +1166,7 @@ function normalizeEvents(events) {
     ...event,
     assignees: normalizeAssignees(event),
     note: event.note || event.notes || "",
+    hidden: event.hidden === true || event.hidden === "true",
   })) : [];
 }
 
@@ -1277,6 +1281,12 @@ function canDeleteTask(task) {
 
 function eventMatchesCurrentFilter(event) {
   return taskMatchesCurrentFilter(event);
+}
+
+function eventVisibleToCurrentUser(event) {
+  if (!event.hidden) return true;
+  if (state.isViewer || !state.currentUser) return false;
+  return sameName(event.requester, state.currentUser) || taskAppliesToPerson(event, state.currentUser);
 }
 
 function canDeleteEvent(event) {
