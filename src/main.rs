@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8100";
 const BIND_ADDRESS_FILE: &str = "data/bind_address.txt";
@@ -71,6 +72,11 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "200 OK",
             "application/json; charset=utf-8",
             accounts_json(&read_accounts()),
+        ),
+        ("GET", "/api/now") => (
+            "200 OK",
+            "application/json; charset=utf-8",
+            host_time_json(),
         ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
@@ -198,6 +204,14 @@ fn handle_delete_account(body: &str) -> (&'static str, &'static str, String) {
 
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
+}
+
+fn host_time_json() -> String {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!(r#"{{"nowMs":{now_ms}}}"#)
 }
 
 fn write_response(
@@ -370,11 +384,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <h1 id="week-title">This week</h1>
         <p id="week-range" class="week-range"></p>
       </section>
+      <section class="clock-panel" aria-label="Host date and time">
+        <time id="host-time" class="host-time">--:--</time>
+        <time id="host-date" class="host-date">Loading date</time>
+      </section>
       <nav class="week-actions" aria-label="Week navigation">
         <button id="prev-week" class="icon-button" type="button" aria-label="Previous week">&lsaquo;</button>
         <button id="today" class="text-button" type="button">Today</button>
         <button id="next-week" class="icon-button" type="button" aria-label="Next week">&rsaquo;</button>
-        <button id="admin-open" class="text-button secondary" type="button">Admin</button>
+        <button id="admin-open" class="icon-button secondary admin-cog" type="button" aria-label="Admin settings">&#9881;</button>
       </nav>
     </header>
 
@@ -501,6 +519,7 @@ button {
 
 .eyebrow,
 .week-range,
+.host-date,
 label span,
 .task-meta,
 .admin-message {
@@ -534,9 +553,28 @@ h2 {
   font-size: clamp(1rem, 1.8vw, 1.35rem);
 }
 
+.clock-panel {
+  min-width: 150px;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.host-time {
+  font-size: clamp(1.7rem, 3vw, 3rem);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.host-date {
+  font-size: clamp(0.92rem, 1.3vw, 1.12rem);
+  font-weight: 800;
+  text-align: right;
+}
+
 .week-actions {
   display: grid;
-  grid-template-columns: 64px auto 64px auto;
+  grid-template-columns: 64px auto 64px 64px;
   align-items: center;
   gap: 10px;
 }
@@ -566,6 +604,10 @@ h2 {
 
 .secondary {
   background: var(--accent-strong);
+}
+
+.admin-cog {
+  font-size: 1.8rem;
 }
 
 .planner-stage {
@@ -832,7 +874,13 @@ select {
   }
 
   .topbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: end;
+  }
+
+  .week-actions {
+    grid-column: 1 / -1;
   }
 
   .planner-stage {
@@ -883,11 +931,19 @@ select {
   }
 
   .week-actions {
-    grid-template-columns: 58px auto 58px auto;
+    grid-template-columns: 58px auto 58px 58px;
   }
 
   .icon-button {
     width: 58px;
+  }
+
+  .clock-panel {
+    justify-items: start;
+  }
+
+  .host-date {
+    text-align: left;
   }
 
   .member-rail {
@@ -909,11 +965,14 @@ const state = {
   tasks: loadTasks(),
   accounts: [],
   adminPassword: "",
+  hostClockOffsetMs: 0,
 };
 
 const grid = document.querySelector("#week-grid");
 const weekTitle = document.querySelector("#week-title");
 const weekRange = document.querySelector("#week-range");
+const hostTime = document.querySelector("#host-time");
+const hostDate = document.querySelector("#host-date");
 const taskDay = document.querySelector("#task-day");
 const taskAssignee = document.querySelector("#task-assignee");
 const taskRequester = document.querySelector("#task-requester");
@@ -931,7 +990,7 @@ const accountList = document.querySelector("#account-list");
 document.querySelector("#prev-week").addEventListener("click", () => shiftWeek(-1));
 document.querySelector("#next-week").addEventListener("click", () => shiftWeek(1));
 document.querySelector("#today").addEventListener("click", () => {
-  state.weekStart = startOfWeek(new Date());
+  state.weekStart = startOfWeek(hostNow());
   render();
 });
 
@@ -1005,7 +1064,7 @@ form.addEventListener("submit", (event) => {
 
   saveTasks();
   form.reset();
-  taskDay.value = toDateKey(new Date());
+  taskDay.value = toDateKey(hostNow());
   render();
 });
 
@@ -1033,8 +1092,33 @@ grid.addEventListener("pointerup", (event) => {
 });
 
 async function init() {
+  await syncHostTime();
+  state.weekStart = startOfWeek(hostNow());
+  renderClock();
+  setInterval(renderClock, 1000);
+  setInterval(syncHostTime, 5 * 60 * 1000);
   await loadAccounts();
   render();
+}
+
+async function syncHostTime() {
+  try {
+    const response = await fetch("/api/now");
+    const data = await response.json();
+    state.hostClockOffsetMs = data.nowMs - Date.now();
+  } catch {
+    state.hostClockOffsetMs = 0;
+  }
+}
+
+function hostNow() {
+  return new Date(Date.now() + state.hostClockOffsetMs);
+}
+
+function renderClock() {
+  const now = hostNow();
+  hostTime.textContent = formatDate(now, { hour: "2-digit", minute: "2-digit" });
+  hostDate.textContent = formatDate(now, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 
 async function loadAccounts(accounts = null) {
@@ -1090,14 +1174,14 @@ function setAdminMode(isLoggedIn) {
 
 function renderWeekHeading() {
   const days = getWeekDays();
-  const todayStart = startOfWeek(new Date());
+  const todayStart = startOfWeek(hostNow());
   const weekOffset = Math.round((state.weekStart - todayStart) / (7 * 24 * 60 * 60 * 1000));
   weekTitle.textContent = weekOffset === 0 ? "This week" : weekOffset === 1 ? "Next week" : weekOffset === -1 ? "Last week" : `${Math.abs(weekOffset)} weeks ${weekOffset > 0 ? "ahead" : "back"}`;
   weekRange.textContent = `${formatDate(days[0], { month: "long", day: "numeric" })} - ${formatDate(days[6], { month: "long", day: "numeric", year: "numeric" })}`;
 }
 
 function renderDayOptions() {
-  const current = taskDay.value || toDateKey(new Date());
+  const current = taskDay.value || toDateKey(hostNow());
   taskDay.innerHTML = getWeekDays().map((day) => `
     <option value="${toDateKey(day)}">${formatDate(day, { weekday: "long", month: "short", day: "numeric" })}</option>
   `).join("");
