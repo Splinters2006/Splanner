@@ -2,10 +2,25 @@
 
 A touch-friendly family weekly planner for a living-room tablet.
 
-The app runs as a small local Rust web server and stores planner items in the
-browser's local storage. Everyone signs in with their account name and 4 digit
-PIN, can add tasks, optionally set a time/by value, and can assign tasks to one
-or more people or groups.
+The app runs as a small local Rust web server and stores planner data in plain
+text files under `data/`. Everyone signs in with their account name and 4 digit
+PIN, can add tasks, events, and broadcasts, and can assign items to one or more
+people or groups.
+
+## Features
+
+- Weekly planner view with a shared 00:00-24:00 timeline.
+- Events appear in the left timeline lane and stretch to match their duration.
+- Timed tasks appear in the right timeline lane for the hour before their due
+  time. Untimed tasks appear below the timeline.
+- Tasks and events can be created for any date, including dates outside the
+  currently visible week.
+- The task filter can show everyone, any person, or any group for every user.
+- People and groups are visually separated wherever they are selectable.
+- Notes open in a centered popup instead of expanding inside cards.
+- Cards show a blue border when the signed-in user is a recipient, and a green
+  border when the signed-in user created the item.
+- Broadcasts can be sent to people, groups, or everyone.
 
 ## Development
 
@@ -19,6 +34,15 @@ cargo run
 
 Open <http://127.0.0.1:8100/> after `cargo run`.
 
+The Rust server code is in `src/main.rs`. The frontend is split into:
+
+- `src/index.html`
+- `src/styles.css`
+- `src/app.js`
+
+These files are embedded into the Rust binary with `include_str!`, so rebuild or
+rerun the server after changing frontend assets.
+
 `./Splanner.sh setup` updates from the git repository, installs Rust/Cargo when
 missing, builds the app, optionally requests UPnP router port forwarding,
 optionally configures Tailscale remote access, asks for the admin password used
@@ -29,8 +53,8 @@ Accounts are created from the admin cogwheel. Each account needs a name and
 4 digit PIN. There are no default accounts.
 
 Groups are also managed from the admin cogwheel. Admins can create groups and
-add or remove people from them. Groups appear next to people when assigning a
-task.
+add or remove people from them. Groups appear separately from people when
+assigning tasks, events, or broadcasts, and when filtering the planner.
 
 Splanner has a built-in undeletable `overview` account for living-room tablet
 display mode. Log in as `overview` with the admin password. It shows only the
