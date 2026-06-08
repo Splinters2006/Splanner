@@ -663,9 +663,10 @@ fn handle_delete_event(body: &str) -> (&'static str, &'static str, String) {
         return server_error(&error.to_string());
     }
 
+    let events = read_events();
     json_response(
         "200 OK",
-        &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&remaining)),
+        &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&events)),
     )
 }
 
@@ -1096,14 +1097,10 @@ fn write_events(events: &[EventPlan]) -> std::io::Result<()> {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(
-        EVENTS_FILE,
-        if body.is_empty() {
-            body
-        } else {
-            format!("{body}\n")
-        },
-    )
+    let body = if body.is_empty() { body } else { format!("{body}\n") };
+    let temp_file = format!("{EVENTS_FILE}.tmp");
+    fs::write(&temp_file, body)?;
+    fs::rename(temp_file, EVENTS_FILE)
 }
 
 fn parse_event_line(line: &str) -> Option<EventPlan> {
@@ -1915,24 +1912,6 @@ h3 {
   font-weight: 700;
 }
 
-.time-strip {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  margin-top: 10px;
-}
-
-.time-strip span {
-  min-height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  background: #eef3ef;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 850;
-}
-
 .task-list {
   display: grid;
   align-content: start;
@@ -2079,6 +2058,15 @@ legend {
 .person-option input {
   width: 18px;
   min-height: 18px;
+}
+
+.person-option.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.person-option.is-disabled input {
+  cursor: not-allowed;
 }
 
 input,
@@ -2690,6 +2678,11 @@ const groupForm = document.querySelector("#group-form");
 const groupName = document.querySelector("#group-name");
 const groupList = document.querySelector("#group-list");
 
+[taskAssignees, eventAssignees, broadcastTargets].forEach((container) => {
+  if (!container) return;
+  container.addEventListener("change", () => updateGroupSelectionDisabling(container));
+});
+
 userLogin.addEventListener("submit", async (event) => {
   event.preventDefault();
   const response = await apiPost("/api/user/login", {
@@ -3014,6 +3007,7 @@ grid.addEventListener("click", async (event) => {
       return;
     }
     state.events = normalizeEvents(response.events);
+    await loadEvents(false);
     render();
     return;
   }
@@ -3072,7 +3066,7 @@ async function init() {
 
 async function loadTasks(shouldRender = true) {
   try {
-    state.tasks = normalizeTasks(await fetch("/api/tasks").then((response) => response.json()));
+    state.tasks = normalizeTasks(await fetch("/api/tasks", { cache: "no-store" }).then((response) => response.json()));
     if (!state.tasks.length) {
       await migrateLegacyTasks();
     }
@@ -3084,7 +3078,7 @@ async function loadTasks(shouldRender = true) {
 
 async function loadEvents(shouldRender = true) {
   try {
-    state.events = normalizeEvents(await fetch("/api/events").then((response) => response.json()));
+    state.events = normalizeEvents(await fetch("/api/events", { cache: "no-store" }).then((response) => response.json()));
   } catch {
     state.events = [];
   }
@@ -3093,7 +3087,7 @@ async function loadEvents(shouldRender = true) {
 
 async function loadBroadcasts(shouldRender = true) {
   try {
-    state.broadcasts = normalizeBroadcasts(await fetch("/api/broadcasts").then((response) => response.json()));
+    state.broadcasts = normalizeBroadcasts(await fetch("/api/broadcasts", { cache: "no-store" }).then((response) => response.json()));
   } catch {
     state.broadcasts = [];
   }
@@ -3142,7 +3136,7 @@ async function migrateLegacyTasks() {
       note: task.note || task.notes || "",
     });
   }
-  state.tasks = normalizeTasks(await fetch("/api/tasks").then((response) => response.json()));
+  state.tasks = normalizeTasks(await fetch("/api/tasks", { cache: "no-store" }).then((response) => response.json()));
   localStorage.setItem(`${LEGACY_STORAGE_KEY}.migrated`, new Date().toISOString());
 }
 
@@ -3305,7 +3299,11 @@ function renderPersonOptions() {
     ? `${personOptions}${groupOptions}`
     : `<span class="chip">No accounts or groups yet</span>`;
   taskAssignees.innerHTML = optionsHtml;
-  if (eventAssignees) eventAssignees.innerHTML = optionsHtml;
+  updateGroupSelectionDisabling(taskAssignees);
+  if (eventAssignees) {
+    eventAssignees.innerHTML = optionsHtml;
+    updateGroupSelectionDisabling(eventAssignees);
+  }
 }
 
 function renderBroadcastTargets() {
@@ -3325,10 +3323,11 @@ function renderBroadcastTargets() {
   broadcastTargets.innerHTML = personOptions || groupOptions
     ? `${personOptions}${groupOptions}`
     : `<span class="chip">No accounts or groups yet</span>`;
+  updateGroupSelectionDisabling(broadcastTargets);
 }
 
 function getSelectedBroadcastTargets() {
-  return Array.from(broadcastTargets.querySelectorAll("input:checked")).map((input) => input.value);
+  return getSelectableCheckedValues(broadcastTargets);
 }
 
 function renderTaskFilter() {
@@ -3354,12 +3353,71 @@ function renderTaskFilter() {
   taskFilter.value = state.taskFilter;
 }
 
+function getSelectableCheckedValues(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll("input:checked:not(:disabled)")).map((input) => input.value);
+}
+
 function getSelectedAssignees() {
-  return Array.from(taskAssignees.querySelectorAll("input:checked")).map((input) => input.value);
+  return getSelectableCheckedValues(taskAssignees);
 }
 
 function getSelectedEventAssignees() {
-  return Array.from(eventAssignees.querySelectorAll("input:checked")).map((input) => input.value);
+  return getSelectableCheckedValues(eventAssignees);
+}
+
+function updateGroupSelectionDisabling(container) {
+  if (!container) return;
+  const selectedGroups = Array.from(container.querySelectorAll('input:checked'))
+    .map((input) => input.value)
+    .filter((value) => value.startsWith('@'))
+    .map((value) => value.slice(1));
+  const coveredPeople = new Set();
+  selectedGroups.forEach((groupName) => {
+    resolveGroupMembers(groupName).forEach((member) => coveredPeople.add(member.toLowerCase()));
+  });
+
+  Array.from(container.querySelectorAll('input')).forEach((input) => {
+    const isPerson = !input.value.startsWith('@');
+    const shouldDisable = isPerson && coveredPeople.has(input.value.toLowerCase());
+    input.disabled = shouldDisable;
+    if (shouldDisable) input.checked = false;
+    const label = input.closest('.person-option');
+    if (label) label.classList.toggle('is-disabled', shouldDisable);
+  });
+}
+
+function resolveGroupMembers(groupName, seen = new Set()) {
+  const key = String(groupName || '').toLowerCase();
+  if (!key || seen.has(key)) return [];
+  seen.add(key);
+  const group = state.groups.find((candidate) => sameName(candidate.name, groupName));
+  if (!group) return [];
+
+  const members = [];
+  const addMember = (value) => {
+    const member = String(value || '').trim();
+    if (!member) return;
+    if (member.startsWith('@')) {
+      resolveGroupMembers(member.slice(1), seen).forEach((nested) => members.push(nested));
+    } else {
+      members.push(member);
+    }
+  };
+
+  (group.members || []).forEach(addMember);
+  (group.subgroups || group.children || group.groups || []).forEach((nestedGroup) => {
+    if (typeof nestedGroup === 'string') {
+      resolveGroupMembers(nestedGroup.replace(/^@/, ''), seen).forEach((nested) => members.push(nested));
+    } else if (nestedGroup && nestedGroup.name) {
+      resolveGroupMembers(nestedGroup.name, seen).forEach((nested) => members.push(nested));
+    }
+  });
+
+  return Array.from(new Set(members.map((member) => {
+    const account = taskAccounts().find((name) => sameName(name, member));
+    return account || member;
+  })));
 }
 
 function setAdminMode(isLoggedIn) {
@@ -3443,12 +3501,6 @@ function renderWeekGrid() {
         <header class="day-header">
           <strong>${formatDate(day, { weekday: "short" })}</strong>
           <span class="date-label">${formatDate(day, { month: "short", day: "numeric" })}</span>
-          <div class="time-strip" aria-hidden="true">
-            <span>8</span>
-            <span>12</span>
-            <span>16</span>
-            <span>20</span>
-          </div>
         </header>
         <div class="task-list">
           ${itemsHtml || `<div class="empty-day">Open</div>`}
