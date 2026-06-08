@@ -1,4 +1,6 @@
 target/
+data/*
+!data/.gitkeep
 
 # Rust build artifacts
 *.rlib
