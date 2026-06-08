@@ -9,8 +9,20 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1:8100";
 const BIND_ADDRESS_FILE: &str = "data/bind_address.txt";
 const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
-const DEFAULT_ACCOUNTS: &[&str] = &["Maya", "Dad", "Mum", "Sam"];
+const GROUPS_FILE: &str = "data/groups.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
+
+#[derive(Clone)]
+struct Account {
+    name: String,
+    pin_hash: String,
+}
+
+#[derive(Clone)]
+struct Group {
+    name: String,
+    members: Vec<String>,
+}
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -29,11 +41,13 @@ fn main() -> std::io::Result<()> {
         }
         set_admin_password(password)?;
         ensure_accounts_file()?;
+        ensure_groups_file()?;
         println!("Admin password saved.");
         return Ok(());
     }
 
     ensure_accounts_file()?;
+    ensure_groups_file()?;
     let address = read_bind_address();
     let listener = TcpListener::bind(&address)?;
     println!("Splanner is running at http://{address}");
@@ -73,14 +87,23 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "application/json; charset=utf-8",
             accounts_json(&read_accounts()),
         ),
+        ("GET", "/api/groups") => (
+            "200 OK",
+            "application/json; charset=utf-8",
+            groups_json(&read_groups()),
+        ),
         ("GET", "/api/now") => (
             "200 OK",
             "application/json; charset=utf-8",
             host_time_json(),
         ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
+        ("POST", "/api/user/login") => handle_user_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
         ("POST", "/api/accounts/delete") => handle_delete_account(&parsed.body),
+        ("POST", "/api/groups") => handle_add_group(&parsed.body),
+        ("POST", "/api/groups/delete") => handle_delete_group(&parsed.body),
+        ("POST", "/api/groups/member") => handle_group_member(&parsed.body),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -146,10 +169,25 @@ fn handle_add_account(body: &str) -> (&'static str, &'static str, String) {
     if name.is_empty() {
         return json_response("400 Bad Request", r#"{"ok":false,"error":"Name required"}"#);
     }
+    let pin = json_field(body, "pin").unwrap_or_default();
+    if !is_valid_pin(&pin) {
+        return json_response(
+            "400 Bad Request",
+            r#"{"ok":false,"error":"Use a 4 digit PIN"}"#,
+        );
+    }
 
     let mut accounts = read_accounts();
-    if !accounts.iter().any(|account| same_name(account, &name)) {
-        accounts.push(name);
+    if let Some(account) = accounts
+        .iter_mut()
+        .find(|account| same_name(&account.name, &name))
+    {
+        account.pin_hash = password_hash(&pin);
+    } else {
+        accounts.push(Account {
+            name,
+            pin_hash: password_hash(&pin),
+        });
         if let Err(error) = write_accounts(&accounts) {
             return json_response(
                 "500 Internal Server Error",
@@ -178,13 +216,8 @@ fn handle_delete_account(body: &str) -> (&'static str, &'static str, String) {
 
     let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
     let mut accounts = read_accounts();
-    accounts.retain(|account| !same_name(account, &name));
-    if accounts.is_empty() {
-        return json_response(
-            "400 Bad Request",
-            r#"{"ok":false,"error":"Keep at least one account"}"#,
-        );
-    }
+    accounts.retain(|account| !same_name(&account.name, &name));
+    remove_account_from_groups(&name);
 
     if let Err(error) = write_accounts(&accounts) {
         return json_response(
@@ -202,8 +235,143 @@ fn handle_delete_account(body: &str) -> (&'static str, &'static str, String) {
     )
 }
 
+fn handle_add_group(body: &str) -> (&'static str, &'static str, String) {
+    let password = json_field(body, "password").unwrap_or_default();
+    if !verify_admin_password(&password) {
+        return json_response(
+            "401 Unauthorized",
+            r#"{"ok":false,"error":"Wrong password"}"#,
+        );
+    }
+
+    let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
+    if name.is_empty() {
+        return json_response("400 Bad Request", r#"{"ok":false,"error":"Name required"}"#);
+    }
+
+    let mut groups = read_groups();
+    if !groups.iter().any(|group| same_name(&group.name, &name)) {
+        groups.push(Group {
+            name,
+            members: Vec::new(),
+        });
+        if let Err(error) = write_groups(&groups) {
+            return server_error(&error.to_string());
+        }
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"groups":{}}}"#, groups_json(&groups)),
+    )
+}
+
+fn handle_delete_group(body: &str) -> (&'static str, &'static str, String) {
+    let password = json_field(body, "password").unwrap_or_default();
+    if !verify_admin_password(&password) {
+        return json_response(
+            "401 Unauthorized",
+            r#"{"ok":false,"error":"Wrong password"}"#,
+        );
+    }
+
+    let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
+    let mut groups = read_groups();
+    groups.retain(|group| !same_name(&group.name, &name));
+    if let Err(error) = write_groups(&groups) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"groups":{}}}"#, groups_json(&groups)),
+    )
+}
+
+fn handle_group_member(body: &str) -> (&'static str, &'static str, String) {
+    let password = json_field(body, "password").unwrap_or_default();
+    if !verify_admin_password(&password) {
+        return json_response(
+            "401 Unauthorized",
+            r#"{"ok":false,"error":"Wrong password"}"#,
+        );
+    }
+
+    let group_name = sanitize_account_name(&json_field(body, "group").unwrap_or_default());
+    let member = sanitize_account_name(&json_field(body, "member").unwrap_or_default());
+    let action = json_field(body, "action").unwrap_or_default();
+    if group_name.is_empty() || member.is_empty() {
+        return json_response(
+            "400 Bad Request",
+            r#"{"ok":false,"error":"Group and member required"}"#,
+        );
+    }
+    if !read_accounts()
+        .iter()
+        .any(|account| same_name(&account.name, &member))
+    {
+        return json_response(
+            "400 Bad Request",
+            r#"{"ok":false,"error":"Unknown account"}"#,
+        );
+    }
+
+    let mut groups = read_groups();
+    let Some(group) = groups
+        .iter_mut()
+        .find(|group| same_name(&group.name, &group_name))
+    else {
+        return json_response(
+            "404 Not Found",
+            r#"{"ok":false,"error":"Unknown group"}"#,
+        );
+    };
+
+    if action == "remove" {
+        group.members.retain(|name| !same_name(name, &member));
+    } else if !group.members.iter().any(|name| same_name(name, &member)) {
+        group.members.push(member);
+    }
+
+    if let Err(error) = write_groups(&groups) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"groups":{}}}"#, groups_json(&groups)),
+    )
+}
+
+fn handle_user_login(body: &str) -> (&'static str, &'static str, String) {
+    let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
+    let pin = json_field(body, "pin").unwrap_or_default();
+    let is_valid = read_accounts()
+        .iter()
+        .any(|account| same_name(&account.name, &name) && account.pin_hash == password_hash(&pin));
+
+    if is_valid {
+        json_response(
+            "200 OK",
+            &format!(r#"{{"ok":true,"name":"{}"}}"#, escape_json(&name)),
+        )
+    } else {
+        json_response(
+            "401 Unauthorized",
+            r#"{"ok":false,"error":"Wrong name or PIN"}"#,
+        )
+    }
+}
+
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
+}
+
+fn server_error(error: &str) -> (&'static str, &'static str, String) {
+    json_response(
+        "500 Internal Server Error",
+        &format!(r#"{{"ok":false,"error":"{}"}}"#, escape_json(error)),
+    )
 }
 
 fn host_time_json() -> String {
@@ -255,12 +423,15 @@ fn ensure_data_dir() -> std::io::Result<()> {
 fn ensure_accounts_file() -> std::io::Result<()> {
     ensure_data_dir()?;
     if !Path::new(ACCOUNTS_FILE).exists() {
-        write_accounts(
-            &DEFAULT_ACCOUNTS
-                .iter()
-                .map(|name| name.to_string())
-                .collect::<Vec<_>>(),
-        )?;
+        fs::write(ACCOUNTS_FILE, "")?;
+    }
+    Ok(())
+}
+
+fn ensure_groups_file() -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if !Path::new(GROUPS_FILE).exists() {
+        fs::write(GROUPS_FILE, "")?;
     }
     Ok(())
 }
@@ -273,32 +444,116 @@ fn read_bind_address() -> String {
         .unwrap_or_else(|| DEFAULT_ADDRESS.to_string())
 }
 
-fn read_accounts() -> Vec<String> {
-    let accounts = fs::read_to_string(ACCOUNTS_FILE)
+fn read_accounts() -> Vec<Account> {
+    fs::read_to_string(ACCOUNTS_FILE)
         .unwrap_or_default()
         .lines()
-        .map(sanitize_account_name)
-        .filter(|name| !name.is_empty())
-        .fold(Vec::<String>::new(), |mut list, name| {
-            if !list.iter().any(|existing| same_name(existing, &name)) {
-                list.push(name);
+        .filter_map(parse_account_line)
+        .fold(Vec::<Account>::new(), |mut list, account| {
+            if !list
+                .iter()
+                .any(|existing| same_name(&existing.name, &account.name))
+            {
+                list.push(account);
             }
             list
-        });
+        })
+}
 
-    if accounts.is_empty() {
-        DEFAULT_ACCOUNTS
-            .iter()
-            .map(|name| name.to_string())
-            .collect()
+fn write_accounts(accounts: &[Account]) -> std::io::Result<()> {
+    ensure_data_dir()?;
+    let body = accounts
+        .iter()
+        .map(|account| format!("{}\t{}", account.name, account.pin_hash))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        ACCOUNTS_FILE,
+        if body.is_empty() {
+            body
+        } else {
+            format!("{body}\n")
+        },
+    )
+}
+
+fn parse_account_line(line: &str) -> Option<Account> {
+    let (name, pin_hash) = line.split_once('\t')?;
+    let name = sanitize_account_name(name);
+    let pin_hash = pin_hash.trim().to_string();
+    if name.is_empty() || pin_hash.is_empty() {
+        None
     } else {
-        accounts
+        Some(Account { name, pin_hash })
     }
 }
 
-fn write_accounts(accounts: &[String]) -> std::io::Result<()> {
+fn read_groups() -> Vec<Group> {
+    let accounts = read_accounts();
+    fs::read_to_string(GROUPS_FILE)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| parse_group_line(line, &accounts))
+        .fold(Vec::<Group>::new(), |mut list, group| {
+            if !list
+                .iter()
+                .any(|existing| same_name(&existing.name, &group.name))
+            {
+                list.push(group);
+            }
+            list
+        })
+}
+
+fn write_groups(groups: &[Group]) -> std::io::Result<()> {
     ensure_data_dir()?;
-    fs::write(ACCOUNTS_FILE, format!("{}\n", accounts.join("\n")))
+    let body = groups
+        .iter()
+        .map(|group| format!("{}\t{}", group.name, group.members.join(",")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        GROUPS_FILE,
+        if body.is_empty() {
+            body
+        } else {
+            format!("{body}\n")
+        },
+    )
+}
+
+fn parse_group_line(line: &str, accounts: &[Account]) -> Option<Group> {
+    let (name, members) = line.split_once('\t').unwrap_or((line, ""));
+    let name = sanitize_account_name(name);
+    if name.is_empty() {
+        return None;
+    }
+    let members = members
+        .split(',')
+        .map(sanitize_account_name)
+        .filter(|member| {
+            !member.is_empty()
+                && accounts
+                    .iter()
+                    .any(|account| same_name(&account.name, member))
+        })
+        .fold(Vec::<String>::new(), |mut list, member| {
+            if !list.iter().any(|existing| same_name(existing, &member)) {
+                list.push(member);
+            }
+            list
+        });
+    Some(Group { name, members })
+}
+
+fn remove_account_from_groups(account_name: &str) {
+    let mut groups = read_groups();
+    for group in &mut groups {
+        group.members.retain(|member| !same_name(member, account_name));
+    }
+    if let Err(error) = write_groups(&groups) {
+        eprintln!("failed to update groups: {error}");
+    }
 }
 
 fn sanitize_account_name(name: &str) -> String {
@@ -320,15 +575,47 @@ fn same_name(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
 }
 
-fn accounts_json(accounts: &[String]) -> String {
+fn accounts_json(accounts: &[Account]) -> String {
     format!(
         "[{}]",
         accounts
             .iter()
-            .map(|account| format!(r#""{}""#, escape_json(account)))
+            .map(|account| format!(r#""{}""#, escape_json(&account.name)))
             .collect::<Vec<_>>()
             .join(",")
     )
+}
+
+fn groups_json(groups: &[Group]) -> String {
+    format!(
+        "[{}]",
+        groups
+            .iter()
+            .map(|group| {
+                format!(
+                    r#"{{"name":"{}","members":{}}}"#,
+                    escape_json(&group.name),
+                    string_array_json(&group.members)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn string_array_json(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!(r#""{}""#, escape_json(value)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn is_valid_pin(pin: &str) -> bool {
+    pin.len() == 4 && pin.chars().all(|character| character.is_ascii_digit())
 }
 
 fn json_field(body: &str, field: &str) -> Option<String> {
@@ -377,7 +664,24 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="app-shell">
+  <section id="login-screen" class="login-screen" aria-label="Sign in">
+    <form id="user-login" class="login-form" autocomplete="off">
+      <h1>Splanner</h1>
+      <label>
+        <span>Name</span>
+        <select id="login-name" name="name" required></select>
+      </label>
+      <label>
+        <span>PIN</span>
+        <input id="login-pin" name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required>
+      </label>
+      <button type="submit">Open planner</button>
+      <button id="login-admin-open" class="plain-button" type="button">Admin settings</button>
+      <p id="login-message" class="admin-message" role="status"></p>
+    </form>
+  </section>
+
+  <main id="app-shell" class="app-shell" hidden>
     <header class="topbar">
       <section class="brand-block" aria-label="Current week">
         <p class="eyebrow">Family planner</p>
@@ -411,14 +715,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <span>Day</span>
           <select id="task-day" name="day"></select>
         </label>
-        <label>
-          <span>For</span>
-          <select id="task-assignee" name="assignee"></select>
-        </label>
-        <label>
-          <span>Asked by</span>
-          <select id="task-requester" name="requester"></select>
-        </label>
+        <fieldset class="person-field">
+          <legend>For</legend>
+          <div id="task-assignees" class="person-options"></div>
+        </fieldset>
         <button type="submit">Add</button>
       </form>
     </aside>
@@ -448,9 +748,25 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <span>New account</span>
           <input id="account-name" name="name" maxlength="32" required placeholder="Alex">
         </label>
+        <label>
+          <span>PIN</span>
+          <input id="account-pin" name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="1234">
+        </label>
         <button type="submit">Add account</button>
       </form>
       <div id="account-list" class="account-list"></div>
+
+      <section class="group-admin">
+        <h3>Groups</h3>
+        <form id="group-form" class="admin-form" autocomplete="off">
+          <label>
+            <span>New group</span>
+            <input id="group-name" name="name" maxlength="32" required placeholder="Kids">
+          </label>
+          <button type="submit">Add group</button>
+        </form>
+        <div id="group-list" class="group-list"></div>
+      </section>
     </section>
   </dialog>
 
@@ -502,6 +818,29 @@ button {
   cursor: pointer;
 }
 
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.login-form {
+  width: min(420px, 100%);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.login-form h1 {
+  font-size: 3rem;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -534,7 +873,8 @@ label span,
 }
 
 h1,
-h2 {
+h2,
+h3 {
   margin: 0;
   letter-spacing: 0;
 }
@@ -546,6 +886,10 @@ h1 {
 
 h2 {
   font-size: 1.6rem;
+}
+
+h3 {
+  font-size: 1.15rem;
 }
 
 .week-range {
@@ -581,6 +925,7 @@ h2 {
 
 .icon-button,
 .text-button,
+.login-form button,
 .quick-add button,
 .admin-form button {
   min-height: 56px;
@@ -776,15 +1121,55 @@ h2 {
 
 form {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(120px, 1fr)) auto;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(220px, 2fr) minmax(120px, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
 
-label {
+label,
+.person-field {
   display: grid;
   gap: 6px;
   font-weight: 750;
+}
+
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+legend {
+  padding: 0;
+  color: var(--muted);
+}
+
+.person-options {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+  padding: 7px;
+}
+
+.person-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  border-radius: 999px;
+  background: #e8eeee;
+  padding: 0 10px;
+}
+
+.person-option input {
+  width: 18px;
+  min-height: 18px;
 }
 
 input,
@@ -846,13 +1231,15 @@ select {
   grid-column: 1 / -1;
 }
 
-.account-list {
+.account-list,
+.group-list {
   display: grid;
   gap: 8px;
   margin-top: 14px;
 }
 
-.account-row {
+.account-row,
+.group-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -865,13 +1252,36 @@ select {
   font-weight: 800;
 }
 
-.account-row button {
+.account-row button,
+.group-row button {
   min-height: 38px;
   border-radius: 8px;
   padding: 0 12px;
   background: #edf1ef;
   color: var(--muted);
   font-weight: 800;
+}
+
+.group-admin {
+  margin-top: 22px;
+}
+
+.group-row {
+  display: grid;
+  align-items: start;
+}
+
+.group-row header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.group-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 @media (max-width: 980px) {
@@ -927,6 +1337,7 @@ select {
   }
 
   form label:first-child,
+  .person-field,
   .quick-add button {
     grid-column: 1 / -1;
   }
@@ -972,17 +1383,24 @@ const state = {
   tasks: loadTasks(),
   accounts: [],
   adminPassword: "",
+  currentUser: sessionStorage.getItem("splanner.currentUser") || "",
   hostClockOffsetMs: 0,
 };
 
+const loginScreen = document.querySelector("#login-screen");
+const appShell = document.querySelector("#app-shell");
+const userLogin = document.querySelector("#user-login");
+const loginName = document.querySelector("#login-name");
+const loginPin = document.querySelector("#login-pin");
+const loginMessage = document.querySelector("#login-message");
 const grid = document.querySelector("#week-grid");
 const weekTitle = document.querySelector("#week-title");
 const weekRange = document.querySelector("#week-range");
 const hostTime = document.querySelector("#host-time");
 const hostDate = document.querySelector("#host-date");
 const taskDay = document.querySelector("#task-day");
-const taskAssignee = document.querySelector("#task-assignee");
-const taskRequester = document.querySelector("#task-requester");
+const taskAssignees = document.querySelector("#task-assignees");
+const currentUserLabel = document.querySelector("#current-user-label");
 const form = document.querySelector("#task-form");
 const memberRail = document.querySelector("#member-rail");
 const adminDialog = document.querySelector("#admin-dialog");
@@ -992,7 +1410,25 @@ const adminPassword = document.querySelector("#admin-password");
 const adminMessage = document.querySelector("#admin-message");
 const accountForm = document.querySelector("#account-form");
 const accountName = document.querySelector("#account-name");
+const accountPin = document.querySelector("#account-pin");
 const accountList = document.querySelector("#account-list");
+
+userLogin.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const response = await apiPost("/api/user/login", {
+    name: loginName.value,
+    pin: loginPin.value,
+  });
+  if (!response.ok) {
+    loginMessage.textContent = response.error || "Wrong name or PIN";
+    return;
+  }
+  state.currentUser = response.name;
+  sessionStorage.setItem("splanner.currentUser", state.currentUser);
+  loginPin.value = "";
+  loginMessage.textContent = "";
+  showPlanner();
+});
 
 document.querySelector("#prev-week").addEventListener("click", () => shiftWeek(-1));
 document.querySelector("#next-week").addEventListener("click", () => shiftWeek(1));
@@ -1002,6 +1438,14 @@ document.querySelector("#today").addEventListener("click", () => {
 });
 
 document.querySelector("#admin-open").addEventListener("click", () => {
+  openAdmin();
+});
+
+document.querySelector("#login-admin-open").addEventListener("click", () => {
+  openAdmin();
+});
+
+function openAdmin() {
   adminMessage.textContent = "";
   if (typeof adminDialog.showModal === "function") {
     adminDialog.showModal();
@@ -1009,7 +1453,7 @@ document.querySelector("#admin-open").addEventListener("click", () => {
     adminDialog.setAttribute("open", "");
   }
   if (!state.adminPassword) adminPassword.focus();
-});
+}
 
 document.querySelector("#admin-close").addEventListener("click", () => {
   if (typeof adminDialog.close === "function") {
@@ -1043,12 +1487,14 @@ accountForm.addEventListener("submit", async (event) => {
   const response = await apiPost("/api/accounts", {
     password: state.adminPassword,
     name: accountName.value,
+    pin: accountPin.value,
   });
   if (!response.ok) {
     adminMessage.textContent = response.error || "Could not add account";
     return;
   }
   accountName.value = "";
+  accountPin.value = "";
   await loadAccounts(response.accounts);
 });
 
@@ -1076,8 +1522,8 @@ form.addEventListener("submit", (event) => {
     id: createId(),
     title,
     date: data.get("day"),
-    assignee: data.get("assignee"),
-    requester: data.get("requester"),
+    assignees: getSelectedAssignees(),
+    requester: state.currentUser,
     createdAt: new Date().toISOString(),
   });
 
@@ -1118,6 +1564,11 @@ async function init() {
   setInterval(renderClock, 1000);
   setInterval(syncHostTime, 5 * 60 * 1000);
   await loadAccounts();
+  if (state.currentUser && state.accounts.includes(state.currentUser)) {
+    showPlanner();
+  } else {
+    showLogin();
+  }
   render();
 }
 
@@ -1143,6 +1594,11 @@ function renderClock() {
 
 async function loadAccounts(accounts = null) {
   state.accounts = accounts || await fetch("/api/accounts").then((response) => response.json());
+  if (!state.accounts.includes(state.currentUser)) {
+    state.currentUser = "";
+    sessionStorage.removeItem("splanner.currentUser");
+  }
+  renderLoginOptions();
   renderMembers();
   renderAccountControls();
   renderPersonOptions();
@@ -1150,12 +1606,32 @@ async function loadAccounts(accounts = null) {
 }
 
 function render() {
+  currentUserLabel.textContent = state.currentUser || "Nobody";
   renderMembers();
   renderWeekHeading();
   renderDayOptions();
   renderPersonOptions();
   renderWeekGrid();
   renderAccountControls();
+}
+
+function showLogin() {
+  loginScreen.hidden = false;
+  appShell.hidden = true;
+  renderLoginOptions();
+}
+
+function showPlanner() {
+  loginScreen.hidden = true;
+  appShell.hidden = false;
+  render();
+}
+
+function renderLoginOptions() {
+  loginName.innerHTML = state.accounts.length
+    ? state.accounts.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")
+    : `<option value="">Ask admin to add accounts</option>`;
+  loginName.value = state.accounts.includes(state.currentUser) ? state.currentUser : state.accounts[0] || "";
 }
 
 function renderMembers() {
@@ -1177,13 +1653,18 @@ function renderAccountControls() {
 }
 
 function renderPersonOptions() {
-  const assignee = taskAssignee.value;
-  const requester = taskRequester.value;
-  const options = state.accounts.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
-  taskAssignee.innerHTML = `<option value="">Anyone</option>${options}`;
-  taskRequester.innerHTML = `<option value="">Family</option>${options}`;
-  taskAssignee.value = state.accounts.includes(assignee) ? assignee : "";
-  taskRequester.value = state.accounts.includes(requester) ? requester : "";
+  taskAssignees.innerHTML = state.accounts.length
+    ? state.accounts.map((name) => `
+      <label class="person-option">
+        <input type="checkbox" value="${escapeHtml(name)}">
+        <span>${escapeHtml(name)}</span>
+      </label>
+    `).join("")
+    : `<span class="chip">No accounts yet</span>`;
+}
+
+function getSelectedAssignees() {
+  return Array.from(taskAssignees.querySelectorAll("input:checked")).map((input) => input.value);
 }
 
 function setAdminMode(isLoggedIn) {
@@ -1229,7 +1710,12 @@ function renderWeekGrid() {
 }
 
 function renderTask(task, index) {
-  const assignee = task.assignee || "Anyone";
+  const assignees = Array.isArray(task.assignees)
+    ? task.assignees
+    : task.assignee
+      ? [task.assignee]
+      : [];
+  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = task.requester ? `Asked by ${task.requester}` : "Family task";
   return `
     <article class="task-card" data-tone="${index % 4}">
@@ -1309,25 +1795,7 @@ function createId() {
 }
 
 function seedTasks() {
-  const days = Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(new Date()), index));
-  return [
-    {
-      id: createId(),
-      title: "Set dinner table",
-      date: toDateKey(days[0]),
-      assignee: "Sam",
-      requester: "Mum",
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: createId(),
-      title: "Bring sports bag",
-      date: toDateKey(days[2]),
-      assignee: "Maya",
-      requester: "Dad",
-      createdAt: new Date(Date.now() + 1).toISOString(),
-    },
-  ];
+  return [];
 }
 
 function escapeHtml(value) {
