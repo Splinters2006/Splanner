@@ -951,10 +951,10 @@ function renderTask(task, index, dateKey = null) {
 
 function taskTimelinePosition(task) {
   const end = Math.max(0, Math.min(timeToMinutes(task.time), 24 * 60));
-  const start = Math.max(0, end - 30);
+  const start = Math.max(0, end - 60);
   return {
     top: (start / (24 * 60)) * 100,
-    height: ((end - start || 30) / (24 * 60)) * 100,
+    height: ((end - start || 60) / (24 * 60)) * 100,
   };
 }
 
