@@ -11,6 +11,7 @@ const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const GROUPS_FILE: &str = "data/groups.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
+const OVERVIEW_ACCOUNT: &str = "overview";
 
 #[derive(Clone)]
 struct Account {
@@ -169,6 +170,12 @@ fn handle_add_account(body: &str) -> (&'static str, &'static str, String) {
     if name.is_empty() {
         return json_response("400 Bad Request", r#"{"ok":false,"error":"Name required"}"#);
     }
+    if is_overview_account(&name) {
+        return json_response(
+            "400 Bad Request",
+            r#"{"ok":false,"error":"Overview is a built-in account"}"#,
+        );
+    }
     let pin = json_field(body, "pin").unwrap_or_default();
     if !is_valid_pin(&pin) {
         return json_response(
@@ -215,6 +222,15 @@ fn handle_delete_account(body: &str) -> (&'static str, &'static str, String) {
     }
 
     let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
+    if is_overview_account(&name) {
+        return json_response(
+            "200 OK",
+            &format!(
+                r#"{{"ok":true,"accounts":{}}}"#,
+                accounts_json(&read_accounts())
+            ),
+        );
+    }
     let mut accounts = read_accounts();
     accounts.retain(|account| !same_name(&account.name, &name));
     remove_account_from_groups(&name);
@@ -343,6 +359,19 @@ fn handle_group_member(body: &str) -> (&'static str, &'static str, String) {
 fn handle_user_login(body: &str) -> (&'static str, &'static str, String) {
     let name = sanitize_account_name(&json_field(body, "name").unwrap_or_default());
     let pin = json_field(body, "pin").unwrap_or_default();
+    if is_overview_account(&name) {
+        if verify_admin_password(&pin) {
+            return json_response(
+                "200 OK",
+                &format!(r#"{{"ok":true,"name":"{}"}}"#, OVERVIEW_ACCOUNT),
+            );
+        }
+        return json_response(
+            "401 Unauthorized",
+            r#"{"ok":false,"error":"Wrong name or PIN"}"#,
+        );
+    }
+
     let is_valid = read_accounts()
         .iter()
         .any(|account| same_name(&account.name, &name) && account.pin_hash == password_hash(&pin));
@@ -575,14 +604,13 @@ fn same_name(left: &str, right: &str) -> bool {
 }
 
 fn accounts_json(accounts: &[Account]) -> String {
-    format!(
-        "[{}]",
-        accounts
-            .iter()
-            .map(|account| format!(r#""{}""#, escape_json(&account.name)))
-            .collect::<Vec<_>>()
-            .join(",")
-    )
+    let mut names = vec![OVERVIEW_ACCOUNT.to_string()];
+    names.extend(accounts.iter().map(|account| account.name.clone()));
+    string_array_json(&names)
+}
+
+fn is_overview_account(name: &str) -> bool {
+    same_name(name, OVERVIEW_ACCOUNT)
 }
 
 fn groups_json(groups: &[Group]) -> String {
@@ -672,7 +700,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </label>
       <label>
         <span>PIN</span>
-        <input id="login-pin" name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required>
+        <input id="login-pin" name="pin" inputmode="numeric" required>
       </label>
       <button type="submit">Open planner</button>
       <button id="login-admin-open" class="plain-button" type="button">Admin settings</button>
@@ -1748,7 +1776,16 @@ function showPlanner() {
 }
 
 function isViewerAccount(name) {
-  return String(name).trim().toLowerCase() === "viewer";
+  const normalized = String(name).trim().toLowerCase();
+  return normalized === "viewer" || normalized === "overview";
+}
+
+function isSystemAccount(name) {
+  return String(name).trim().toLowerCase() === "overview";
+}
+
+function taskAccounts() {
+  return state.accounts.filter((name) => !isSystemAccount(name));
 }
 
 function renderLoginOptions() {
@@ -1759,7 +1796,7 @@ function renderLoginOptions() {
 }
 
 function renderMembers() {
-  memberRail.innerHTML = state.accounts.map((name, index) => `
+  memberRail.innerHTML = taskAccounts().map((name, index) => `
     <article class="member">
       <span class="avatar" style="background:${ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]}">${name.slice(0, 1)}</span>
       <strong>${escapeHtml(name)}</strong>
@@ -1771,7 +1808,9 @@ function renderAccountControls() {
   accountList.innerHTML = state.accounts.map((name) => `
     <div class="account-row">
       <span>${escapeHtml(name)}</span>
-      <button type="button" data-account-delete="${escapeHtml(name)}">Delete</button>
+      ${isSystemAccount(name)
+        ? `<span class="chip">Built in</span>`
+        : `<button type="button" data-account-delete="${escapeHtml(name)}">Delete</button>`}
     </div>
   `).join("");
 }
@@ -1785,7 +1824,7 @@ function renderGroupControls() {
           <button type="button" data-group-delete="${escapeHtml(group.name)}">Delete</button>
         </header>
         <div class="group-members">
-          ${state.accounts.map((name) => {
+          ${taskAccounts().map((name) => {
             const isMember = group.members.includes(name);
             return `
               <button type="button"
@@ -1803,7 +1842,7 @@ function renderGroupControls() {
 }
 
 function renderPersonOptions() {
-  const personOptions = state.accounts.map((name) => `
+  const personOptions = taskAccounts().map((name) => `
       <label class="person-option">
         <input type="checkbox" value="${escapeHtml(name)}">
         <span>${escapeHtml(name)}</span>
