@@ -360,7 +360,7 @@ h3 {
 
 .timeline-task {
   top: calc(var(--task-top) * 1%);
-  height: max(40px, calc(var(--task-height) * 1%));
+  height: calc(var(--task-height) * 1%);
 }
 
 .timeline-event .event-title {
