@@ -4,7 +4,8 @@ A touch-friendly family weekly planner for a living-room tablet.
 
 The app runs as a small local Rust web server and stores planner items in the
 browser's local storage. Everyone signs in with their account name and 4 digit
-PIN, can add tasks, and can assign tasks to one or more people or groups.
+PIN, can add tasks, optionally set a time/by value, and can assign tasks to one
+or more people or groups.
 
 ## Development
 

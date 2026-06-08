@@ -714,6 +714,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <span>Day</span>
           <select id="task-day" name="day"></select>
         </label>
+        <label>
+          <span>Time/by</span>
+          <input id="task-time" name="time" type="time">
+        </label>
         <fieldset class="person-field">
           <legend>For</legend>
           <div id="task-assignees" class="person-options"></div>
@@ -1028,6 +1032,24 @@ h3 {
   font-weight: 700;
 }
 
+.time-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.time-strip span {
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #eef3ef;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
 .task-list {
   display: grid;
   align-content: start;
@@ -1081,6 +1103,11 @@ h3 {
   background: #e8eeee;
 }
 
+.time-chip {
+  background: var(--ink);
+  color: #fff;
+}
+
 .task-actions {
   display: flex;
   justify-content: flex-end;
@@ -1120,7 +1147,7 @@ h3 {
 
 form {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(220px, 2fr) minmax(120px, 1fr) auto;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(110px, 1fr) minmax(220px, 2fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -1570,6 +1597,7 @@ form.addEventListener("submit", (event) => {
     id: createId(),
     title,
     date: data.get("day"),
+    time: data.get("time"),
     assignees: getSelectedAssignees(),
     requester: state.currentUser,
     createdAt: new Date().toISOString(),
@@ -1784,12 +1812,18 @@ function renderWeekGrid() {
     const key = toDateKey(day);
     const tasks = state.tasks
       .filter((task) => task.date === key)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      .sort(sortTasks);
     return `
       <article class="day-column">
         <header class="day-header">
           <strong>${formatDate(day, { weekday: "short" })}</strong>
           <span class="date-label">${formatDate(day, { month: "short", day: "numeric" })}</span>
+          <div class="time-strip" aria-hidden="true">
+            <span>8</span>
+            <span>12</span>
+            <span>16</span>
+            <span>20</span>
+          </div>
         </header>
         <div class="task-list">
           ${tasks.length ? tasks.map(renderTask).join("") : `<div class="empty-day">Open</div>`}
@@ -1810,6 +1844,7 @@ function renderTask(task, index) {
     <article class="task-card" data-tone="${index % 4}">
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
+        ${task.time ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
         <span class="chip">${escapeHtml(assignee)}</span>
       </div>
       <div class="task-actions">
@@ -1817,6 +1852,13 @@ function renderTask(task, index) {
       </div>
     </article>
   `;
+}
+
+function sortTasks(a, b) {
+  if (a.time && b.time && a.time !== b.time) return a.time.localeCompare(b.time);
+  if (a.time && !b.time) return -1;
+  if (!a.time && b.time) return 1;
+  return a.createdAt.localeCompare(b.createdAt);
 }
 
 async function apiPost(url, payload) {
@@ -1861,6 +1903,13 @@ function toDateKey(date) {
 
 function formatDate(date, options) {
   return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+function formatTaskTime(value) {
+  const [hour, minute] = value.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hour, minute || 0, 0, 0);
+  return formatDate(date, { hour: "numeric", minute: "2-digit" });
 }
 
 function loadTasks() {
