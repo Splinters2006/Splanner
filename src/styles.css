@@ -329,24 +329,45 @@ h3 {
   border-top: 1px solid rgba(100, 112, 122, 0.22);
 }
 
-.timeline-events {
+.timeline-items {
   position: absolute;
   inset: 0 0 0 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
 }
 
-.timeline-event {
+.timeline-column {
+  position: relative;
+  min-width: 0;
+}
+
+.timeline-event,
+.timeline-task {
   position: absolute;
-  top: calc(var(--event-top) * 1%);
   left: 0;
   right: 0;
-  height: max(40px, calc(var(--event-height) * 1%));
   min-height: 0;
   overflow: hidden;
   padding: 8px;
   z-index: 1;
 }
 
+.timeline-event {
+  top: calc(var(--event-top) * 1%);
+  height: max(40px, calc(var(--event-height) * 1%));
+}
+
+.timeline-task {
+  top: calc(var(--task-top) * 1%);
+  height: max(40px, calc(var(--task-height) * 1%));
+}
+
 .timeline-event .event-title {
+  font-size: 0.95rem;
+}
+
+.timeline-task .task-title {
   font-size: 0.95rem;
 }
 
@@ -355,7 +376,16 @@ h3 {
   font-size: 0.82rem;
 }
 
+.timeline-task .task-meta {
+  gap: 5px;
+  font-size: 0.82rem;
+}
+
 .timeline-event .event-actions {
+  margin-top: auto;
+}
+
+.timeline-task .task-actions {
   margin-top: auto;
 }
 
@@ -718,6 +748,11 @@ textarea {
 .task-card {
   min-width: 0;
   height: auto;
+}
+
+.task-card.timeline-task {
+  min-height: 0;
+  padding: 8px;
 }
 
 .task-card.has-note {

@@ -888,21 +888,25 @@ function renderWeekGrid() {
       .filter((task) => task.date === key)
       .filter(taskMatchesCurrentFilter)
       .sort(sortTasks);
+    const timedTasks = tasks.filter((task) => task.time);
+    const untimedTasks = tasks.filter((task) => !task.time);
     const events = state.events
       .filter((event) => eventOverlapsDay(event, key))
       .filter(eventMatchesCurrentFilter)
       .sort(sortEvents);
-    const tasksHtml = tasks.map(renderTask).join("");
+    const untimedTasksHtml = untimedTasks.map(renderTask).join("");
     return `
       <article class="day-column">
         <header class="day-header">
           <strong>${formatDate(day, { weekday: "short" })}</strong>
           <span class="date-label">${formatDate(day, { month: "short", day: "numeric" })}</span>
         </header>
-        ${renderDayTimeline(events, key)}
-        <div class="task-list ${tasks.length ? "" : "is-empty"}">
-          ${tasksHtml || `<div class="empty-day">No tasks</div>`}
-        </div>
+        ${renderDayTimeline(events, timedTasks, key)}
+        ${untimedTasks.length ? `
+          <div class="task-list">
+            ${untimedTasksHtml}
+          </div>
+        ` : ""}
       </article>
     `;
   }).join("");
@@ -920,14 +924,19 @@ function renderWeekTimeAxis() {
   `;
 }
 
-function renderDayTimeline(events, dateKey) {
+function renderDayTimeline(events, tasks, dateKey) {
   const hourRows = renderTimelineHours(false);
   return `
     <section class="day-timeline" aria-label="Events from 00:00 to 24:00">
       <div class="timeline-lane">
         ${hourRows}
-        <div class="timeline-events">
-          ${events.map((event, index) => renderEvent(event, index, dateKey)).join("")}
+        <div class="timeline-items">
+          <div class="timeline-column timeline-events" aria-label="Events">
+            ${events.map((event, index) => renderEvent(event, index, dateKey)).join("")}
+          </div>
+          <div class="timeline-column timeline-tasks" aria-label="Tasks">
+            ${tasks.map((task, index) => renderTask(task, index, dateKey)).join("")}
+          </div>
         </div>
       </div>
     </section>
@@ -942,15 +951,19 @@ function renderTimelineHours(showLabels) {
   `).join("");
 }
 
-function renderTask(task, index) {
+function renderTask(task, index, dateKey = null) {
   const assignees = normalizeAssignees(task);
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = task.requester ? `by: ${task.requester}` : "by: unknown";
   const note = String(task.note || task.notes || "").trim();
   const noteId = `task-note-${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const canDelete = canDeleteTask(task);
+  const position = dateKey && task.time ? taskTimelinePosition(task) : null;
+  const timelineStyle = position
+    ? ` style="--task-top:${position.top}; --task-height:${position.height};"`
+    : "";
   return `
-    <article class="task-card ${note ? "has-note" : ""}" data-tone="${index % 4}">
+    <article class="task-card ${dateKey ? "timeline-task" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
@@ -964,6 +977,14 @@ function renderTask(task, index) {
       <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
     </article>
   `;
+}
+
+function taskTimelinePosition(task) {
+  const top = Math.max(0, Math.min(timeToMinutes(task.time), 24 * 60));
+  return {
+    top: (top / (24 * 60)) * 100,
+    height: (30 / (24 * 60)) * 100,
+  };
 }
 
 function renderEvent(event, index, dateKey = null) {
