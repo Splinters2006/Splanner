@@ -12,6 +12,7 @@ const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const GROUPS_FILE: &str = "data/groups.txt";
 const TASKS_FILE: &str = "data/tasks.txt";
 const BROADCASTS_FILE: &str = "data/broadcasts.txt";
+const EVENTS_FILE: &str = "data/events.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
 const OVERVIEW_ACCOUNT: &str = "overview";
 
@@ -49,6 +50,20 @@ struct Broadcast {
     seen_by: Vec<String>,
 }
 
+#[derive(Clone)]
+struct EventPlan {
+    id: String,
+    title: String,
+    start_date: String,
+    start_time: String,
+    end_date: String,
+    end_time: String,
+    assignees: Vec<String>,
+    requester: String,
+    created_at: String,
+    note: String,
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.get(1).map(String::as_str) == Some("--set-admin-password") {
@@ -69,6 +84,7 @@ fn main() -> std::io::Result<()> {
         ensure_groups_file()?;
         ensure_tasks_file()?;
         ensure_broadcasts_file()?;
+        ensure_events_file()?;
         println!("Admin password saved.");
         return Ok(());
     }
@@ -77,6 +93,7 @@ fn main() -> std::io::Result<()> {
     ensure_groups_file()?;
     ensure_tasks_file()?;
     ensure_broadcasts_file()?;
+    ensure_events_file()?;
     let address = read_bind_address();
     let listener = TcpListener::bind(&address)?;
     println!("Splanner is running at http://{address}");
@@ -136,6 +153,11 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "application/json; charset=utf-8",
             broadcasts_json(&read_broadcasts()),
         ),
+        ("GET", "/api/events") => (
+            "200 OK",
+            "application/json; charset=utf-8",
+            events_json(&read_events()),
+        ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
         ("POST", "/api/user/login") => handle_user_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
@@ -147,6 +169,8 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         ("POST", "/api/tasks/delete") => handle_delete_task(&parsed.body),
         ("POST", "/api/broadcasts") => handle_add_broadcast(&parsed.body),
         ("POST", "/api/broadcasts/seen") => handle_mark_broadcast_seen(&parsed.body),
+        ("POST", "/api/events") => handle_add_event(&parsed.body),
+        ("POST", "/api/events/delete") => handle_delete_event(&parsed.body),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -563,6 +587,88 @@ fn handle_mark_broadcast_seen(body: &str) -> (&'static str, &'static str, String
     )
 }
 
+fn handle_add_event(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let title = sanitize_task_text(&json_field(body, "title").unwrap_or_default(), 100);
+    let start_date = json_field(body, "startDate").unwrap_or_default();
+    let start_time = json_field(body, "startTime").unwrap_or_default();
+    let end_date = json_field(body, "endDate").unwrap_or_default();
+    let end_time = json_field(body, "endTime").unwrap_or_default();
+    let created_at = sanitize_task_text(&json_field(body, "createdAt").unwrap_or_default(), 40);
+    let note = sanitize_note_text(&json_field(body, "note").unwrap_or_default(), 2000);
+    let assignees = parse_assignees_field(&json_field(body, "assignees").unwrap_or_default());
+
+    if title.is_empty()
+        || !is_valid_date_key(&start_date)
+        || !is_valid_time_value(&start_time)
+        || !is_valid_date_key(&end_date)
+        || !is_valid_time_value(&end_time)
+        || start_time.is_empty()
+        || end_time.is_empty()
+    {
+        return json_response("400 Bad Request", r#"{"ok":false,"error":"Invalid event"}"#);
+    }
+
+    let mut events = read_events();
+    events.push(EventPlan {
+        id: create_event_id(),
+        title,
+        start_date,
+        start_time,
+        end_date,
+        end_time,
+        assignees,
+        requester,
+        created_at,
+        note,
+    });
+
+    if let Err(error) = write_events(&events) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&events)),
+    )
+}
+
+fn handle_delete_event(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 100);
+    let groups = read_groups();
+    let events = read_events();
+    let Some(event) = events.iter().find(|event| event.id == id) else {
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown event"}"#);
+    };
+
+    if !can_delete_event(event, &requester, &groups) {
+        return json_response("403 Forbidden", r#"{"ok":false,"error":"Not allowed to delete this event"}"#);
+    }
+
+    let remaining = events
+        .into_iter()
+        .filter(|event| event.id != id)
+        .collect::<Vec<_>>();
+
+    if let Err(error) = write_events(&remaining) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&remaining)),
+    )
+}
+
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
 }
@@ -648,6 +754,14 @@ fn ensure_broadcasts_file() -> std::io::Result<()> {
     ensure_data_dir()?;
     if !Path::new(BROADCASTS_FILE).exists() {
         fs::write(BROADCASTS_FILE, "")?;
+    }
+    Ok(())
+}
+
+fn ensure_events_file() -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if !Path::new(EVENTS_FILE).exists() {
+        fs::write(EVENTS_FILE, "")?;
     }
     Ok(())
 }
@@ -950,6 +1064,115 @@ fn broadcasts_json(broadcasts: &[Broadcast]) -> String {
     )
 }
 
+fn read_events() -> Vec<EventPlan> {
+    fs::read_to_string(EVENTS_FILE)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(parse_event_line)
+        .collect()
+}
+
+fn write_events(events: &[EventPlan]) -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if Path::new(EVENTS_FILE).exists() {
+        let _ = fs::copy(EVENTS_FILE, "data/events.backup.txt");
+    }
+    let body = events
+        .iter()
+        .map(|event| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                event.id,
+                event.title,
+                event.start_date,
+                event.start_time,
+                event.end_date,
+                event.end_time,
+                event.assignees.join(","),
+                event.requester,
+                event.created_at,
+                event.note
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        EVENTS_FILE,
+        if body.is_empty() {
+            body
+        } else {
+            format!("{body}\n")
+        },
+    )
+}
+
+fn parse_event_line(line: &str) -> Option<EventPlan> {
+    let parts = line.split('\t').collect::<Vec<_>>();
+    if parts.len() != 10 {
+        return None;
+    }
+    let id = sanitize_task_text(parts[0], 100);
+    let title = sanitize_task_text(parts[1], 100);
+    let start_date = parts[2].to_string();
+    let start_time = parts[3].to_string();
+    let end_date = parts[4].to_string();
+    let end_time = parts[5].to_string();
+    let assignees = parse_assignees_field(parts[6]);
+    let requester = sanitize_account_name(parts[7]);
+    let created_at = sanitize_task_text(parts[8], 40);
+    let note = sanitize_note_text(parts[9], 2000);
+
+    if id.is_empty()
+        || title.is_empty()
+        || !is_valid_date_key(&start_date)
+        || !is_valid_time_value(&start_time)
+        || !is_valid_date_key(&end_date)
+        || !is_valid_time_value(&end_time)
+        || start_time.is_empty()
+        || end_time.is_empty()
+    {
+        None
+    } else {
+        Some(EventPlan {
+            id,
+            title,
+            start_date,
+            start_time,
+            end_date,
+            end_time,
+            assignees,
+            requester,
+            created_at,
+            note,
+        })
+    }
+}
+
+fn events_json(events: &[EventPlan]) -> String {
+    format!(
+        "[{}]",
+        events
+            .iter()
+            .map(|event| {
+                format!(
+                    r#"{{"id":"{}","title":"{}","startDate":"{}","startTime":"{}","endDate":"{}","endTime":"{}","assignees":{},"requester":"{}","createdAt":"{}","note":"{}"}}"#,
+                    escape_json(&event.id),
+                    escape_json(&event.title),
+                    escape_json(&event.start_date),
+                    escape_json(&event.start_time),
+                    escape_json(&event.end_date),
+                    escape_json(&event.end_time),
+                    string_array_json(&event.assignees),
+                    escape_json(&event.requester),
+                    escape_json(&event.created_at),
+                    escape_json(&event.note)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 fn parse_assignees_field(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -1046,6 +1269,14 @@ fn create_broadcast_id() -> String {
     format!("broadcast-{now}")
 }
 
+fn create_event_id() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("event-{now}")
+}
+
 fn can_delete_task(task: &Task, requester: &str, groups: &[Group]) -> bool {
     if same_name(&task.requester, requester) {
         return true;
@@ -1054,6 +1285,22 @@ fn can_delete_task(task: &Task, requester: &str, groups: &[Group]) -> bool {
         return true;
     }
     task.assignees.iter().any(|assignee| {
+        if let Some(group_name) = assignee.strip_prefix('@') {
+            is_member_of_group(requester, group_name, groups)
+        } else {
+            same_name(assignee, requester)
+        }
+    })
+}
+
+fn can_delete_event(event: &EventPlan, requester: &str, groups: &[Group]) -> bool {
+    if same_name(&event.requester, requester) {
+        return true;
+    }
+    if event.assignees.is_empty() {
+        return true;
+    }
+    event.assignees.iter().any(|assignee| {
         if let Some(group_name) = assignee.strip_prefix('@') {
             is_member_of_group(requester, group_name, groups)
         } else {
@@ -1217,33 +1464,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <time id="host-time" class="host-time">--:--</time>
         <time id="host-date" class="host-date">Loading date</time>
       </section>
-      <nav class="week-actions" aria-label="Week navigation">
-        <button id="prev-week" class="icon-button" type="button" aria-label="Previous week">&lsaquo;</button>
-        <button id="today" class="text-button" type="button">Today</button>
-        <button id="next-week" class="icon-button" type="button" aria-label="Next week">&rsaquo;</button>
-        <button id="admin-open" class="icon-button secondary admin-cog" type="button" aria-label="Admin settings">&#9881;</button>
-      </nav>
       <section class="filter-panel" aria-label="Task filter">
         <label>
           <span>Show tasks for</span>
           <select id="task-filter"></select>
         </label>
       </section>
+      <nav class="week-actions" aria-label="Week navigation">
+        <button id="prev-week" class="icon-button" type="button" aria-label="Previous week">&lsaquo;</button>
+        <button id="today" class="text-button" type="button">Today</button>
+        <button id="next-week" class="icon-button" type="button" aria-label="Next week">&rsaquo;</button>
+        <button id="admin-open" class="icon-button secondary admin-cog" type="button" aria-label="Admin settings">&#9881;</button>
+      </nav>
     </header>
 
     <section id="broadcast-panel" class="broadcast-panel" aria-label="Family broadcasts">
       <div id="broadcast-list" class="broadcast-list"></div>
-      <form id="broadcast-form" class="broadcast-form" autocomplete="off">
-        <label class="broadcast-message-field">
-          <span>Broadcast</span>
-          <input id="broadcast-message" name="message" maxlength="500" placeholder="I will be 30 minutes late">
-        </label>
-        <fieldset class="broadcast-target-field">
-          <legend>To (none = everyone)</legend>
-          <div id="broadcast-targets" class="person-options"></div>
-        </fieldset>
-        <button type="submit">Send</button>
-      </form>
     </section>
 
     <section class="planner-stage" aria-label="Weekly planner">
@@ -1251,22 +1487,38 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <section id="week-grid" class="week-grid" aria-live="polite"></section>
     </section>
 
-    <aside class="quick-add" aria-label="Add plan item">
-      <form id="task-form" autocomplete="off">
+    <button id="create-open" class="floating-add" type="button" aria-label="Create">+</button>
+
+    <dialog id="create-dialog" class="create-dialog">
+      <header class="dialog-header">
+        <h2>Create</h2>
+        <button id="create-close" class="plain-button" type="button" aria-label="Close create menu">Close</button>
+      </header>
+
+      <label class="create-type-field">
+        <span>Type</span>
+        <select id="create-type">
+          <option value="task">Task</option>
+          <option value="broadcast">Broadcast</option>
+          <option value="event">Event</option>
+        </select>
+      </label>
+
+      <form id="task-form" class="create-form" autocomplete="off">
         <label>
-          <span>What</span>
-          <input id="task-title" name="title" required maxlength="80" placeholder="Pick up groceries">
+          <span>Task name</span>
+          <input id="task-title" name="title" required maxlength="100">
         </label>
         <label>
-          <span>Day</span>
+          <span>By date</span>
           <select id="task-day" name="day"></select>
         </label>
         <label>
-          <span>Hour</span>
-          <input id="task-hour" name="hour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2" placeholder="HH">
+          <span>By hour</span>
+          <input id="task-hour" name="hour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
         </label>
         <label>
-          <span>Minute</span>
+          <span>By minute</span>
           <select id="task-minute" name="minute"></select>
         </label>
         <fieldset class="person-field">
@@ -1275,11 +1527,63 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </fieldset>
         <label class="note-field">
           <span>Note</span>
-          <textarea id="task-note" name="note" maxlength="2000" placeholder="Recipe, instructions, link..."></textarea>
+          <textarea id="task-note" name="note" maxlength="2000"></textarea>
         </label>
-        <button type="submit">Add</button>
+        <button type="submit">Add task</button>
       </form>
-    </aside>
+
+      <form id="broadcast-form" class="create-form" autocomplete="off" hidden>
+        <label class="wide-field">
+          <span>Broadcast message</span>
+          <textarea id="broadcast-message" name="message" maxlength="500" required></textarea>
+        </label>
+        <fieldset class="person-field">
+          <legend>To</legend>
+          <div id="broadcast-targets" class="person-options"></div>
+        </fieldset>
+        <button type="submit">Send broadcast</button>
+      </form>
+
+      <form id="event-form" class="create-form" autocomplete="off" hidden>
+        <label>
+          <span>Event name</span>
+          <input id="event-title" name="title" required maxlength="100">
+        </label>
+        <label>
+          <span>Start date</span>
+          <select id="event-start-day" name="startDay"></select>
+        </label>
+        <label>
+          <span>Start hour</span>
+          <input id="event-start-hour" name="startHour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
+        </label>
+        <label>
+          <span>Start minute</span>
+          <select id="event-start-minute" name="startMinute"></select>
+        </label>
+        <label>
+          <span>End date</span>
+          <select id="event-end-day" name="endDay"></select>
+        </label>
+        <label>
+          <span>End hour</span>
+          <input id="event-end-hour" name="endHour" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2">
+        </label>
+        <label>
+          <span>End minute</span>
+          <select id="event-end-minute" name="endMinute"></select>
+        </label>
+        <fieldset class="person-field">
+          <legend>For</legend>
+          <div id="event-assignees" class="person-options"></div>
+        </fieldset>
+        <label class="note-field">
+          <span>Note</span>
+          <textarea id="event-note" name="note" maxlength="2000"></textarea>
+        </label>
+        <button type="submit">Add event</button>
+      </form>
+    </dialog>
   </main>
 
   <dialog id="admin-dialog" class="admin-dialog">
@@ -1304,11 +1608,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <form id="account-form" class="admin-form" autocomplete="off">
         <label>
           <span>New account</span>
-          <input id="account-name" name="name" maxlength="32" required placeholder="Alex">
+          <input id="account-name" name="name" maxlength="32" required>
         </label>
         <label>
           <span>PIN</span>
-          <input id="account-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4}" maxlength="4" required placeholder="1234">
+          <input id="account-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4}" maxlength="4" required>
         </label>
         <button type="submit">Add account</button>
       </form>
@@ -1319,7 +1623,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <form id="group-form" class="admin-form" autocomplete="off">
           <label>
             <span>New group</span>
-            <input id="group-name" name="name" maxlength="32" required placeholder="Kids">
+            <input id="group-name" name="name" maxlength="32" required>
           </label>
           <button type="submit">Add group</button>
         </form>
@@ -2154,6 +2458,164 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+/* Floating creation menu */
+.floating-add {
+  position: fixed;
+  right: max(22px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  z-index: 60;
+  width: 68px;
+  min-height: 68px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 2.4rem;
+  font-weight: 900;
+  box-shadow: var(--shadow);
+}
+
+.create-dialog {
+  width: min(820px, calc(100vw - 28px));
+  max-height: min(840px, calc(100vh - 28px));
+  overflow: auto;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.create-dialog[open] {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  z-index: 70;
+}
+
+.create-dialog::backdrop {
+  background: rgba(29, 35, 40, 0.34);
+}
+
+.create-type-field {
+  margin-bottom: 12px;
+}
+
+.create-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.create-form .person-field,
+.create-form .note-field,
+.create-form .wide-field,
+.create-form button {
+  grid-column: 1 / -1;
+}
+
+.create-form textarea {
+  width: 100%;
+  min-height: 92px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+  color: var(--ink);
+  padding: 12px;
+  resize: vertical;
+  font: inherit;
+}
+
+.create-form button {
+  min-height: 56px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+}
+
+.task-card,
+.event-card,
+.broadcast-card,
+.chip {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.task-meta .chip,
+.event-meta .chip,
+.broadcast-meta .chip {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.event-card {
+  border-left: 6px solid var(--blue);
+  border-radius: 8px;
+  background: #f6f9fc;
+  padding: 12px;
+  min-height: 92px;
+  display: grid;
+  gap: 9px;
+}
+
+.event-title {
+  margin: 0;
+  font-size: clamp(1rem, 1.4vw, 1.18rem);
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.event-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.delete-event,
+.note-toggle,
+.event-note-toggle {
+  width: 38px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: #edf1ef;
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.event-note-panel {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: var(--ink);
+}
+
+.broadcast-seen {
+  width: 38px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: #edf1ef;
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .create-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 "#;
 
 const APP_JS: &str = r##"const LEGACY_STORAGE_KEY = "splanner.tasks.v1";
@@ -2162,6 +2624,7 @@ const ACCOUNT_COLORS = ["#2f6f63", "#4b7fb8", "#d75b62", "#f1b84b", "#7a6fbe", "
 const state = {
   weekStart: startOfWeek(new Date()),
   tasks: [],
+  events: [],
   broadcasts: [],
   accounts: [],
   groups: [],
@@ -2192,6 +2655,20 @@ const taskDay = document.querySelector("#task-day");
 const taskHour = document.querySelector("#task-hour");
 const taskMinute = document.querySelector("#task-minute");
 const taskNote = document.querySelector("#task-note");
+const eventForm = document.querySelector("#event-form");
+const eventTitle = document.querySelector("#event-title");
+const eventStartDay = document.querySelector("#event-start-day");
+const eventStartHour = document.querySelector("#event-start-hour");
+const eventStartMinute = document.querySelector("#event-start-minute");
+const eventEndDay = document.querySelector("#event-end-day");
+const eventEndHour = document.querySelector("#event-end-hour");
+const eventEndMinute = document.querySelector("#event-end-minute");
+const eventAssignees = document.querySelector("#event-assignees");
+const eventNote = document.querySelector("#event-note");
+const createOpen = document.querySelector("#create-open");
+const createDialog = document.querySelector("#create-dialog");
+const createClose = document.querySelector("#create-close");
+const createType = document.querySelector("#create-type");
 const taskFilter = document.querySelector("#task-filter");
 const broadcastList = document.querySelector("#broadcast-list");
 const broadcastForm = document.querySelector("#broadcast-form");
@@ -2229,6 +2706,7 @@ userLogin.addEventListener("submit", async (event) => {
   loginPin.value = "";
   loginMessage.textContent = "";
   await loadTasks();
+  await loadEvents();
   await loadBroadcasts();
   showPlanner();
 });
@@ -2248,6 +2726,34 @@ taskFilter.addEventListener("change", () => {
   renderWeekGrid();
 });
 
+createOpen.addEventListener("click", () => openCreateDialog());
+createClose.addEventListener("click", () => closeCreateDialog());
+createType.addEventListener("change", renderCreateType);
+
+function openCreateDialog() {
+  renderCreateType();
+  if (typeof createDialog.showModal === "function") {
+    createDialog.showModal();
+  } else {
+    createDialog.setAttribute("open", "");
+  }
+}
+
+function closeCreateDialog() {
+  if (typeof createDialog.close === "function") {
+    createDialog.close();
+  } else {
+    createDialog.removeAttribute("open");
+  }
+}
+
+function renderCreateType() {
+  const type = createType.value || "task";
+  form.hidden = type !== "task";
+  broadcastForm.hidden = type !== "broadcast";
+  eventForm.hidden = type !== "event";
+}
+
 broadcastForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (state.isViewer || !state.currentUser) return;
@@ -2266,6 +2772,7 @@ broadcastForm.addEventListener("submit", async (event) => {
   }
   state.broadcasts = normalizeBroadcasts(response.broadcasts);
   broadcastForm.reset();
+  closeCreateDialog();
   renderBroadcasts();
 });
 
@@ -2424,7 +2931,7 @@ form.addEventListener("submit", async (event) => {
   const data = new FormData(form);
   const title = String(data.get("title") || "").trim();
   if (!title) return;
-  const time = selectedTimeValue();
+  const time = selectedTimeValue(taskHour, taskMinute, "by");
   if (time === null) return;
 
   const response = await apiPost("/api/tasks", {
@@ -2445,6 +2952,39 @@ form.addEventListener("submit", async (event) => {
   form.reset();
   taskDay.value = toDateKey(hostNow());
   setDefaultTaskTime();
+  closeCreateDialog();
+  render();
+});
+
+eventForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.isViewer || !state.currentUser) return;
+  const data = new FormData(eventForm);
+  const title = String(data.get("title") || "").trim();
+  if (!title) return;
+  const startTime = selectedTimeValue(eventStartHour, eventStartMinute, "start");
+  const endTime = selectedTimeValue(eventEndHour, eventEndMinute, "end");
+  if (startTime === null || endTime === null || !startTime || !endTime) return;
+
+  const response = await apiPost("/api/events", {
+    title,
+    startDate: data.get("startDay"),
+    startTime,
+    endDate: data.get("endDay"),
+    endTime,
+    assignees: getSelectedEventAssignees().join(","),
+    requester: state.currentUser,
+    createdAt: new Date().toISOString(),
+    note: String(data.get("note") || "").trim(),
+  });
+  if (!response.ok) {
+    alert(response.error || "Could not add event");
+    return;
+  }
+  state.events = normalizeEvents(response.events);
+  eventForm.reset();
+  setDefaultEventTime();
+  closeCreateDialog();
   render();
 });
 
@@ -2453,6 +2993,28 @@ grid.addEventListener("click", async (event) => {
   if (noteButton) {
     const panel = document.querySelector(`#${CSS.escape(noteButton.dataset.noteToggle)}`);
     if (panel) panel.hidden = !panel.hidden;
+    return;
+  }
+
+  const eventNoteButton = event.target.closest("[data-event-note-toggle]");
+  if (eventNoteButton) {
+    const panel = document.querySelector(`#${CSS.escape(eventNoteButton.dataset.eventNoteToggle)}`);
+    if (panel) panel.hidden = !panel.hidden;
+    return;
+  }
+
+  const eventDeleteButton = event.target.closest("[data-event-delete]");
+  if (eventDeleteButton) {
+    const response = await apiPost("/api/events/delete", {
+      id: eventDeleteButton.dataset.eventDelete,
+      requester: state.currentUser,
+    });
+    if (!response.ok) {
+      alert(response.error || "You cannot delete this event");
+      return;
+    }
+    state.events = normalizeEvents(response.events);
+    render();
     return;
   }
 
@@ -2497,6 +3059,7 @@ async function init() {
   await loadAccounts();
   await loadGroups();
   await loadTasks();
+  await loadEvents();
   await loadBroadcasts();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
     state.isViewer = isViewerAccount(state.currentUser);
@@ -2519,6 +3082,15 @@ async function loadTasks(shouldRender = true) {
   if (shouldRender) renderWeekGrid();
 }
 
+async function loadEvents(shouldRender = true) {
+  try {
+    state.events = normalizeEvents(await fetch("/api/events").then((response) => response.json()));
+  } catch {
+    state.events = [];
+  }
+  if (shouldRender) renderWeekGrid();
+}
+
 async function loadBroadcasts(shouldRender = true) {
   try {
     state.broadcasts = normalizeBroadcasts(await fetch("/api/broadcasts").then((response) => response.json()));
@@ -2536,6 +3108,7 @@ async function refreshPlannerDataIfIdle() {
   state.idleRefreshInFlight = true;
   try {
     await loadTasks(false);
+    await loadEvents(false);
     await loadBroadcasts(false);
     renderWeekGrid();
     renderBroadcasts();
@@ -2728,9 +3301,11 @@ function renderPersonOptions() {
         <span>${escapeHtml(group.name)}</span>
       </label>
     `).join("");
-  taskAssignees.innerHTML = personOptions || groupOptions
+  const optionsHtml = personOptions || groupOptions
     ? `${personOptions}${groupOptions}`
     : `<span class="chip">No accounts or groups yet</span>`;
+  taskAssignees.innerHTML = optionsHtml;
+  if (eventAssignees) eventAssignees.innerHTML = optionsHtml;
 }
 
 function renderBroadcastTargets() {
@@ -2783,6 +3358,10 @@ function getSelectedAssignees() {
   return Array.from(taskAssignees.querySelectorAll("input:checked")).map((input) => input.value);
 }
 
+function getSelectedEventAssignees() {
+  return Array.from(eventAssignees.querySelectorAll("input:checked")).map((input) => input.value);
+}
+
 function setAdminMode(isLoggedIn) {
   adminLogin.hidden = isLoggedIn;
   adminPanel.hidden = !isLoggedIn;
@@ -2798,19 +3377,16 @@ function renderBroadcasts() {
 function renderBroadcast(broadcast) {
   const targets = normalizeBroadcastTargets(broadcast);
   const targetLabel = targets.length ? targets.join(", ") : "Everyone";
-  const seenCount = broadcastTargetPeople(broadcast).filter((name) => hasSeenBroadcast(broadcast, name)).length;
-  const targetCount = broadcastTargetPeople(broadcast).length;
-  const canMarkSeen = !state.isViewer && broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
+  const canClose = !state.isViewer && broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
   return `
     <article class="broadcast-card">
       <header>
         <strong>${escapeHtml(broadcast.requester || "Someone")} broadcasts</strong>
-        ${canMarkSeen ? `<button class="broadcast-seen" type="button" data-broadcast-seen="${escapeHtml(broadcast.id)}">Seen</button>` : ""}
+        ${canClose ? `<button class="broadcast-seen" type="button" data-broadcast-seen="${escapeHtml(broadcast.id)}" aria-label="Close broadcast">&times;</button>` : ""}
       </header>
       <p class="broadcast-message">${linkifyNote(broadcast.message || "")}</p>
       <div class="broadcast-meta">
         <span class="chip">To: ${escapeHtml(targetLabel)}</span>
-        ${targetCount ? `<span class="chip">Seen: ${seenCount}/${targetCount}</span>` : ""}
       </div>
     </article>
   `;
@@ -2818,8 +3394,7 @@ function renderBroadcast(broadcast) {
 
 function visibleBroadcasts() {
   return state.broadcasts.filter((broadcast) => {
-    if (broadcastIsComplete(broadcast)) return false;
-    if (state.isViewer) return true;
+    if (state.isViewer) return !broadcastIsComplete(broadcast);
     return broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
   });
 }
@@ -2833,11 +3408,19 @@ function renderWeekHeading() {
 }
 
 function renderDayOptions() {
-  const current = taskDay.value || toDateKey(hostNow());
-  taskDay.innerHTML = getWeekDays().map((day) => `
+  const options = getWeekDays().map((day) => `
     <option value="${toDateKey(day)}">${formatDate(day, { weekday: "long", month: "short", day: "numeric" })}</option>
   `).join("");
-  taskDay.value = getWeekDays().some((day) => toDateKey(day) === current) ? current : toDateKey(getWeekDays()[0]);
+  const currentTask = taskDay.value || toDateKey(hostNow());
+  taskDay.innerHTML = options;
+  taskDay.value = getWeekDays().some((day) => toDateKey(day) === currentTask) ? currentTask : toDateKey(getWeekDays()[0]);
+
+  [eventStartDay, eventEndDay].forEach((select) => {
+    if (!select) return;
+    const current = select.value || toDateKey(hostNow());
+    select.innerHTML = options;
+    select.value = getWeekDays().some((day) => toDateKey(day) === current) ? current : toDateKey(getWeekDays()[0]);
+  });
 }
 
 function renderWeekGrid() {
@@ -2847,6 +3430,14 @@ function renderWeekGrid() {
       .filter((task) => task.date === key)
       .filter(taskMatchesCurrentFilter)
       .sort(sortTasks);
+    const events = state.events
+      .filter((event) => eventOverlapsDay(event, key))
+      .filter(eventMatchesCurrentFilter)
+      .sort(sortEvents);
+    const itemsHtml = [
+      ...events.map(renderEvent),
+      ...tasks.map(renderTask),
+    ].join("");
     return `
       <article class="day-column">
         <header class="day-header">
@@ -2860,7 +3451,7 @@ function renderWeekGrid() {
           </div>
         </header>
         <div class="task-list">
-          ${tasks.length ? tasks.map(renderTask).join("") : `<div class="empty-day">Open</div>`}
+          ${itemsHtml || `<div class="empty-day">Open</div>`}
         </div>
       </article>
     `;
@@ -2886,9 +3477,41 @@ function renderTask(task, index) {
         <button class="note-toggle" type="button" data-note-toggle="${escapeHtml(noteId)}" aria-label="Show note for ${escapeHtml(task.title)}">&#8942;</button>
         ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
-      <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : "No note added."}</div>
+      <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
     </article>
   `;
+}
+
+function renderEvent(event, index) {
+  const assignees = normalizeAssignees(event);
+  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
+  const requester = event.requester ? `by: ${event.requester}` : "by: unknown";
+  const note = String(event.note || event.notes || "").trim();
+  const noteId = `event-note-${String(event.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const canDelete = canDeleteEvent(event);
+  return `
+    <article class="event-card ${note ? "has-note" : ""}" data-tone="${index % 4}">
+      <p class="event-title">${escapeHtml(event.title)}</p>
+      <div class="event-meta">
+        <span class="chip time-chip">${escapeHtml(formatEventTime(event))}</span>
+        <span class="chip">${escapeHtml(assignee)}</span>
+        <span class="chip">${escapeHtml(requester)}</span>
+      </div>
+      <div class="event-actions">
+        <button class="event-note-toggle" type="button" data-event-note-toggle="${escapeHtml(noteId)}" aria-label="Show note for ${escapeHtml(event.title)}">&#8942;</button>
+        ${canDelete ? `<button class="delete-event" type="button" data-event-delete="${escapeHtml(event.id)}" aria-label="Remove ${escapeHtml(event.title)}">&times;</button>` : ""}
+      </div>
+      <div id="${escapeHtml(noteId)}" class="event-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
+    </article>
+  `;
+}
+
+function normalizeEvents(events) {
+  return Array.isArray(events) ? events.map((event) => ({
+    ...event,
+    assignees: normalizeAssignees(event),
+    note: event.note || event.notes || "",
+  })) : [];
 }
 
 function normalizeBroadcasts(broadcasts) {
@@ -2984,6 +3607,31 @@ function canDeleteTask(task) {
   return taskAppliesToPerson(task, state.currentUser);
 }
 
+function eventMatchesCurrentFilter(event) {
+  return taskMatchesCurrentFilter(event);
+}
+
+function canDeleteEvent(event) {
+  if (state.isViewer || !state.currentUser) return false;
+  if (sameName(event.requester, state.currentUser)) return true;
+  const assignees = normalizeAssignees(event);
+  if (!assignees.length) return true;
+  return taskAppliesToPerson(event, state.currentUser);
+}
+
+function eventOverlapsDay(event, dateKey) {
+  const start = String(event.startDate || "");
+  const end = String(event.endDate || start);
+  return start <= dateKey && dateKey <= end;
+}
+
+function sortEvents(a, b) {
+  const aTime = a.startTime || "";
+  const bTime = b.startTime || "";
+  if (aTime && bTime && aTime !== bTime) return aTime.localeCompare(bTime);
+  return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+}
+
 function sortTasks(a, b) {
   if (a.time && b.time && a.time !== b.time) return a.time.localeCompare(b.time);
   if (a.time && !b.time) return -1;
@@ -3020,35 +3668,49 @@ function markOverviewInteraction() {
 }
 
 function renderTimeSelectors() {
-  if (!taskMinute) return;
-  taskMinute.innerHTML = Array.from({ length: 12 }, (_, index) => {
-    const value = String(index * 5).padStart(2, "0");
-    return `<option value="${value}">${value}</option>`;
-  }).join("");
+  [taskMinute, eventStartMinute, eventEndMinute].forEach((select) => {
+    if (!select) return;
+    select.innerHTML = Array.from({ length: 12 }, (_, index) => {
+      const value = String(index * 5).padStart(2, "0");
+      return `<option value="${value}">${value}</option>`;
+    }).join("");
+  });
 }
 
-function selectedTimeValue() {
-  if (!taskHour || !taskMinute) return "";
-  const rawHour = taskHour.value.trim();
-  if (!rawHour) return "";
+function selectedTimeValue(hourInput, minuteSelect, label) {
+  if (!hourInput || !minuteSelect) return "";
+  const rawHour = hourInput.value.trim();
+  if (!rawHour) {
+    alert(`Use a ${label} hour between 0 and 23.`);
+    hourInput.focus();
+    return null;
+  }
   if (!/^\d{1,2}$/.test(rawHour)) {
-    alert("Use an hour between 0 and 23.");
-    taskHour.focus();
+    alert(`Use a ${label} hour between 0 and 23.`);
+    hourInput.focus();
     return null;
   }
   const hour = Number(rawHour);
   if (hour < 0 || hour > 23) {
-    alert("Use an hour between 0 and 23.");
-    taskHour.focus();
+    alert(`Use a ${label} hour between 0 and 23.`);
+    hourInput.focus();
     return null;
   }
-  return `${String(hour).padStart(2, "0")}:${taskMinute.value || "00"}`;
+  return `${String(hour).padStart(2, "0")}:${minuteSelect.value || "00"}`;
 }
 
 function setDefaultTaskTime() {
   if (taskHour) taskHour.value = "";
   if (taskMinute) taskMinute.value = "00";
   if (taskNote) taskNote.value = "";
+}
+
+function setDefaultEventTime() {
+  if (eventStartHour) eventStartHour.value = "";
+  if (eventEndHour) eventEndHour.value = "";
+  if (eventStartMinute) eventStartMinute.value = "00";
+  if (eventEndMinute) eventEndMinute.value = "00";
+  if (eventNote) eventNote.value = "";
 }
 
 function getWeekDays() {
@@ -3085,6 +3747,14 @@ function formatTaskTime(value) {
   const date = new Date();
   date.setHours(hour, minute || 0, 0, 0);
   return formatDate(date, { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function formatEventTime(event) {
+  const startDate = event.startDate || "";
+  const endDate = event.endDate || startDate;
+  const start = `${startDate} ${event.startTime || ""}`.trim();
+  const end = `${endDate} ${event.endTime || ""}`.trim();
+  return start === end ? start : `${start} - ${end}`;
 }
 
 function normalizeTasks(tasks) {
