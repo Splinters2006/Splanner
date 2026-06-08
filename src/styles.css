@@ -364,6 +364,14 @@ h3 {
   z-index: 1;
 }
 
+.timeline-event,
+.timeline-task,
+.task-card.timeline-task,
+.event-card.timeline-event {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
 .timeline-event {
   top: calc(var(--event-top) * 1%);
   height: max(40px, calc(var(--event-height) * 1%));
@@ -669,7 +677,7 @@ select {
   padding: 18px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: 8px;
   box-shadow: var(--shadow);
 }
 
@@ -694,6 +702,40 @@ select {
 .note-dialog-body a {
   color: var(--accent-strong);
   font-weight: 800;
+}
+
+.note-detail-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.note-detail-list div {
+  display: grid;
+  gap: 3px;
+}
+
+.note-detail-list dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.note-detail-list dd {
+  margin: 0;
+  font-weight: 850;
+}
+
+.note-detail-text {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.note-detail-empty {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 750;
 }
 
 .dialog-header {

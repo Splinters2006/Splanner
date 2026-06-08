@@ -954,9 +954,6 @@ function renderTimelineHours(showLabels) {
 }
 
 function renderTask(task, index, dateKey = null) {
-  const assignees = normalizeAssignees(task);
-  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
-  const requester = task.requester ? `by: ${task.requester}` : "by: unknown";
   const note = String(task.note || task.notes || "").trim();
   const canDelete = canDeleteTask(task);
   const position = dateKey && task.time ? taskTimelinePosition(task) : null;
@@ -969,11 +966,9 @@ function renderTask(task, index, dateKey = null) {
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time && !dateKey ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
-        <span class="chip">${escapeHtml(assignee)}</span>
-        <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="task-actions">
-        ${note ? `<button class="note-toggle" type="button" data-note-kind="task" data-note-id="${escapeHtml(task.id)}" aria-label="Show note for ${escapeHtml(task.title)}">&#8942;</button>` : ""}
+        <button class="note-toggle" type="button" data-note-kind="task" data-note-id="${escapeHtml(task.id)}" aria-label="Show details for ${escapeHtml(task.title)}">&#8942;</button>
         ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
     </article>
@@ -995,9 +990,11 @@ function openNoteDialog(kind, id) {
     : state.tasks.find((task) => task.id === id);
   if (!item) return;
   const note = String(item.note || item.notes || "").trim();
-  if (!note) return;
+  if (!note && kind !== "task") return;
   noteDialogTitle.textContent = item.title || "Note";
-  noteDialogBody.innerHTML = linkifyNote(note);
+  noteDialogBody.innerHTML = kind === "task"
+    ? renderTaskDetails(item, note)
+    : linkifyNote(note);
   if (typeof noteDialog.showModal === "function") {
     noteDialog.showModal();
   } else {
@@ -1011,6 +1008,25 @@ function closeNoteDialog() {
   } else {
     noteDialog.removeAttribute("open");
   }
+}
+
+function renderTaskDetails(task, note) {
+  const assignees = normalizeAssignees(task);
+  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
+  const requester = task.requester || "unknown";
+  return `
+    <dl class="note-detail-list">
+      <div>
+        <dt>For</dt>
+        <dd>${escapeHtml(assignee)}</dd>
+      </div>
+      <div>
+        <dt>By</dt>
+        <dd>${escapeHtml(requester)}</dd>
+      </div>
+    </dl>
+    ${note ? `<div class="note-detail-text">${linkifyNote(note)}</div>` : `<p class="note-detail-empty">No note</p>`}
+  `;
 }
 
 function renderEvent(event, index, dateKey = null) {
