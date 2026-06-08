@@ -963,8 +963,9 @@ function renderTask(task, index, dateKey = null) {
   const timelineStyle = position
     ? ` style="--task-top:${position.top}; --task-height:${position.height};"`
     : "";
+  const involvementClass = currentUserInvolvementClass(task);
   return `
-    <article class="task-card ${dateKey ? "timeline-task" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
+    <article class="task-card ${dateKey ? "timeline-task" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time && !dateKey ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
@@ -1022,8 +1023,9 @@ function renderEvent(event, index, dateKey = null) {
   const timelineStyle = position
     ? ` style="--event-top:${position.top}; --event-height:${position.height};"`
     : "";
+  const involvementClass = currentUserInvolvementClass(event);
   return `
-    <article class="event-card ${dateKey ? "timeline-event" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
+    <article class="event-card ${dateKey ? "timeline-event" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
         ${!dateKey ? `<span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>` : ""}
@@ -1056,6 +1058,12 @@ function timeToMinutes(value) {
   const [hour, minute] = String(value || "00:00").split(":").map(Number);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
   return hour * 60 + minute;
+}
+
+function currentUserInvolvementClass(item) {
+  if (state.isViewer || !state.currentUser) return "";
+  if (sameName(item.requester, state.currentUser)) return "is-current-requester";
+  return taskAppliesToPerson(item, state.currentUser) ? "is-current-recipient" : "";
 }
 
 function normalizeEvents(events) {
