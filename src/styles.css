@@ -732,9 +732,27 @@ select {
   font-weight: 750;
 }
 
+.note-edit-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.note-edit-field span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.note-edit-field textarea {
+  min-height: 130px;
+}
+
 .note-dialog-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 18px;
 }
 

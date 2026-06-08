@@ -73,6 +73,7 @@ const noteDialog = document.querySelector("#note-dialog");
 const noteDialogTitle = document.querySelector("#note-dialog-title");
 const noteDialogBody = document.querySelector("#note-dialog-body");
 const noteDialogClose = document.querySelector("#note-dialog-close");
+const noteDialogSave = document.querySelector("#note-dialog-save");
 const noteDialogDelete = document.querySelector("#note-dialog-delete");
 
 [taskAssignees, eventAssignees, broadcastTargets].forEach((container) => {
@@ -391,6 +392,8 @@ grid.addEventListener("click", async (event) => {
 });
 
 noteDialogClose.addEventListener("click", () => closeNoteDialog());
+
+noteDialogSave.addEventListener("click", async () => saveOpenDetailNote());
 
 noteDialogDelete.addEventListener("click", async () => deleteOpenDetailItem());
 
@@ -960,7 +963,6 @@ function openNoteDialog(kind, id) {
     : state.tasks.find((task) => task.id === id);
   if (!item) return;
   const note = String(item.note || item.notes || "").trim();
-  if (!note && kind !== "task") return;
   noteDialogTitle.textContent = item.title || "Note";
   noteDialogBody.innerHTML = kind === "event"
     ? renderEventDetails(item, note)
@@ -968,8 +970,14 @@ function openNoteDialog(kind, id) {
   noteDialog.dataset.detailKind = kind;
   noteDialog.dataset.detailId = id;
   const canDelete = kind === "event" ? canDeleteEvent(item) : canDeleteTask(item);
+  const canEditNote = !state.isViewer && sameName(item.requester, state.currentUser);
+  noteDialog.dataset.canEditNote = canEditNote ? "true" : "false";
   noteDialogDelete.hidden = !canDelete;
   noteDialogDelete.textContent = kind === "event" ? "Delete event" : "Delete task";
+  noteDialogSave.hidden = !canEditNote;
+  if (noteDialog.open) {
+    return;
+  }
   if (typeof noteDialog.showModal === "function") {
     noteDialog.showModal();
   } else {
@@ -980,11 +988,33 @@ function openNoteDialog(kind, id) {
 function closeNoteDialog() {
   delete noteDialog.dataset.detailKind;
   delete noteDialog.dataset.detailId;
+  delete noteDialog.dataset.canEditNote;
   if (typeof noteDialog.close === "function") {
     noteDialog.close();
   } else {
     noteDialog.removeAttribute("open");
   }
+}
+
+async function saveOpenDetailNote() {
+  const kind = noteDialog.dataset.detailKind;
+  const id = noteDialog.dataset.detailId;
+  const noteInput = noteDialog.querySelector("#note-edit-text");
+  if (!kind || !id || !noteInput) return;
+  const response = kind === "event"
+    ? await apiPost("/api/events/note", { id, requester: state.currentUser, note: noteInput.value })
+    : await apiPost("/api/tasks/note", { id, requester: state.currentUser, note: noteInput.value });
+  if (!response.ok) {
+    alert(response.error || `Could not save ${kind} note`);
+    return;
+  }
+  if (kind === "event") {
+    state.events = normalizeEvents(response.events);
+  } else {
+    state.tasks = normalizeTasks(response.tasks);
+  }
+  openNoteDialog(kind, id);
+  render();
 }
 
 async function deleteOpenDetailItem() {
@@ -1028,7 +1058,7 @@ function renderTaskDetails(task, note) {
         <dd>${escapeHtml(requester)}</dd>
       </div>
     </dl>
-    ${note ? `<div class="note-detail-text">${linkifyNote(note)}</div>` : `<p class="note-detail-empty">No note</p>`}
+    ${renderEditableNote(note, sameName(task.requester, state.currentUser) && !state.isViewer)}
   `;
 }
 
@@ -1069,8 +1099,22 @@ function renderEventDetails(event, note) {
         <dd>${escapeHtml(requester)}</dd>
       </div>
     </dl>
-    ${note ? `<div class="note-detail-text">${linkifyNote(note)}</div>` : `<p class="note-detail-empty">No note</p>`}
+    ${renderEditableNote(note, sameName(event.requester, state.currentUser) && !state.isViewer)}
   `;
+}
+
+function renderEditableNote(note, canEdit) {
+  if (canEdit) {
+    return `
+      <label class="note-edit-field">
+        <span>Note</span>
+        <textarea id="note-edit-text" maxlength="2000">${escapeHtml(note)}</textarea>
+      </label>
+    `;
+  }
+  return note
+    ? `<div class="note-detail-text">${linkifyNote(note)}</div>`
+    : `<p class="note-detail-empty">No note</p>`;
 }
 
 function eventTimelinePosition(event, dateKey) {
