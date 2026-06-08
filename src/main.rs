@@ -11,6 +11,7 @@ const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const GROUPS_FILE: &str = "data/groups.txt";
 const TASKS_FILE: &str = "data/tasks.txt";
+const BROADCASTS_FILE: &str = "data/broadcasts.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
 const OVERVIEW_ACCOUNT: &str = "overview";
 
@@ -38,6 +39,16 @@ struct Task {
     note: String,
 }
 
+#[derive(Clone)]
+struct Broadcast {
+    id: String,
+    message: String,
+    targets: Vec<String>,
+    requester: String,
+    created_at: String,
+    seen_by: Vec<String>,
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.get(1).map(String::as_str) == Some("--set-admin-password") {
@@ -57,6 +68,7 @@ fn main() -> std::io::Result<()> {
         ensure_accounts_file()?;
         ensure_groups_file()?;
         ensure_tasks_file()?;
+        ensure_broadcasts_file()?;
         println!("Admin password saved.");
         return Ok(());
     }
@@ -64,6 +76,7 @@ fn main() -> std::io::Result<()> {
     ensure_accounts_file()?;
     ensure_groups_file()?;
     ensure_tasks_file()?;
+    ensure_broadcasts_file()?;
     let address = read_bind_address();
     let listener = TcpListener::bind(&address)?;
     println!("Splanner is running at http://{address}");
@@ -118,6 +131,11 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "application/json; charset=utf-8",
             tasks_json(&read_tasks()),
         ),
+        ("GET", "/api/broadcasts") => (
+            "200 OK",
+            "application/json; charset=utf-8",
+            broadcasts_json(&read_broadcasts()),
+        ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
         ("POST", "/api/user/login") => handle_user_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
@@ -127,6 +145,8 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         ("POST", "/api/groups/member") => handle_group_member(&parsed.body),
         ("POST", "/api/tasks") => handle_add_task(&parsed.body),
         ("POST", "/api/tasks/delete") => handle_delete_task(&parsed.body),
+        ("POST", "/api/broadcasts") => handle_add_broadcast(&parsed.body),
+        ("POST", "/api/broadcasts/seen") => handle_mark_broadcast_seen(&parsed.body),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -483,6 +503,66 @@ fn handle_delete_task(body: &str) -> (&'static str, &'static str, String) {
     )
 }
 
+fn handle_add_broadcast(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let message = sanitize_broadcast_text(&json_field(body, "message").unwrap_or_default(), 500);
+    let created_at = sanitize_task_text(&json_field(body, "createdAt").unwrap_or_default(), 40);
+    let targets = parse_assignees_field(&json_field(body, "targets").unwrap_or_default());
+
+    if message.is_empty() {
+        return json_response("400 Bad Request", r#"{"ok":false,"error":"Message required"}"#);
+    }
+
+    let mut broadcasts = read_broadcasts();
+    broadcasts.push(Broadcast {
+        id: create_broadcast_id(),
+        message,
+        targets,
+        requester,
+        created_at,
+        seen_by: Vec::new(),
+    });
+
+    if let Err(error) = write_broadcasts(&broadcasts) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"broadcasts":{}}}"#, broadcasts_json(&broadcasts)),
+    )
+}
+
+fn handle_mark_broadcast_seen(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 100);
+    let mut broadcasts = read_broadcasts();
+    let Some(broadcast) = broadcasts.iter_mut().find(|broadcast| broadcast.id == id) else {
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown broadcast"}"#);
+    };
+
+    if !broadcast.seen_by.iter().any(|name| same_name(name, &requester)) {
+        broadcast.seen_by.push(requester);
+    }
+
+    if let Err(error) = write_broadcasts(&broadcasts) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"broadcasts":{}}}"#, broadcasts_json(&broadcasts)),
+    )
+}
+
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
 }
@@ -560,6 +640,14 @@ fn ensure_tasks_file() -> std::io::Result<()> {
     ensure_data_dir()?;
     if !Path::new(TASKS_FILE).exists() {
         fs::write(TASKS_FILE, "")?;
+    }
+    Ok(())
+}
+
+fn ensure_broadcasts_file() -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if !Path::new(BROADCASTS_FILE).exists() {
+        fs::write(BROADCASTS_FILE, "")?;
     }
     Ok(())
 }
@@ -768,6 +856,100 @@ fn tasks_json(tasks: &[Task]) -> String {
     )
 }
 
+fn read_broadcasts() -> Vec<Broadcast> {
+    fs::read_to_string(BROADCASTS_FILE)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(parse_broadcast_line)
+        .collect()
+}
+
+fn write_broadcasts(broadcasts: &[Broadcast]) -> std::io::Result<()> {
+    ensure_data_dir()?;
+    if Path::new(BROADCASTS_FILE).exists() {
+        let _ = fs::copy(BROADCASTS_FILE, "data/broadcasts.backup.txt");
+    }
+    let body = broadcasts
+        .iter()
+        .map(|broadcast| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                broadcast.id,
+                broadcast.message,
+                broadcast.targets.join(","),
+                broadcast.requester,
+                broadcast.created_at,
+                broadcast.seen_by.join(",")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        BROADCASTS_FILE,
+        if body.is_empty() {
+            body
+        } else {
+            format!("{body}\n")
+        },
+    )
+}
+
+fn parse_broadcast_line(line: &str) -> Option<Broadcast> {
+    let parts = line.split('\t').collect::<Vec<_>>();
+    if parts.len() != 6 {
+        return None;
+    }
+    let id = sanitize_task_text(parts[0], 100);
+    let message = sanitize_broadcast_text(parts[1], 500);
+    let targets = parse_assignees_field(parts[2]);
+    let requester = sanitize_account_name(parts[3]);
+    let created_at = sanitize_task_text(parts[4], 40);
+    let seen_by = parts[5]
+        .split(',')
+        .map(sanitize_account_name)
+        .filter(|name| !name.is_empty())
+        .fold(Vec::<String>::new(), |mut list, name| {
+            if !list.iter().any(|existing| same_name(existing, &name)) {
+                list.push(name);
+            }
+            list
+        });
+
+    if id.is_empty() || message.is_empty() {
+        None
+    } else {
+        Some(Broadcast {
+            id,
+            message,
+            targets,
+            requester,
+            created_at,
+            seen_by,
+        })
+    }
+}
+
+fn broadcasts_json(broadcasts: &[Broadcast]) -> String {
+    format!(
+        "[{}]",
+        broadcasts
+            .iter()
+            .map(|broadcast| {
+                format!(
+                    r#"{{"id":"{}","message":"{}","targets":{},"requester":"{}","createdAt":"{}","seenBy":{}}}"#,
+                    escape_json(&broadcast.id),
+                    escape_json(&broadcast.message),
+                    string_array_json(&broadcast.targets),
+                    escape_json(&broadcast.requester),
+                    escape_json(&broadcast.created_at),
+                    string_array_json(&broadcast.seen_by)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 fn parse_assignees_field(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -797,6 +979,15 @@ fn sanitize_task_text(value: &str, max_len: usize) -> String {
 }
 
 fn sanitize_note_text(value: &str, max_len: usize) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|character| if matches!(character, '\t' | '\n' | '\r') { ' ' } else { character })
+        .take(max_len)
+        .collect()
+}
+
+fn sanitize_broadcast_text(value: &str, max_len: usize) -> String {
     value
         .trim()
         .chars()
@@ -845,6 +1036,14 @@ fn create_server_id() -> String {
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
     format!("task-{now}")
+}
+
+fn create_broadcast_id() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("broadcast-{now}")
 }
 
 fn can_delete_task(task: &Task, requester: &str, groups: &[Group]) -> bool {
@@ -1032,6 +1231,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </section>
     </header>
 
+    <section id="broadcast-panel" class="broadcast-panel" aria-label="Family broadcasts">
+      <div id="broadcast-list" class="broadcast-list"></div>
+      <form id="broadcast-form" class="broadcast-form" autocomplete="off">
+        <label class="broadcast-message-field">
+          <span>Broadcast</span>
+          <input id="broadcast-message" name="message" maxlength="500" placeholder="I will be 30 minutes late">
+        </label>
+        <fieldset class="broadcast-target-field">
+          <legend>To (none = everyone)</legend>
+          <div id="broadcast-targets" class="person-options"></div>
+        </fieldset>
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
     <section class="planner-stage" aria-label="Weekly planner">
       <div class="member-rail" id="member-rail" aria-label="Family members"></div>
       <section id="week-grid" class="week-grid" aria-live="polite"></section>
@@ -1204,6 +1418,7 @@ button {
 .viewer-mode .quick-add,
 .viewer-mode .member-rail,
 .viewer-mode .task-actions,
+.viewer-mode .broadcast-form,
 .viewer-mode .admin-cog {
   display: none;
 }
@@ -1757,6 +1972,94 @@ textarea {
   font-weight: 800;
 }
 
+
+
+.broadcast-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.broadcast-list {
+  display: grid;
+  gap: 10px;
+}
+
+.broadcast-list:empty {
+  display: none;
+}
+
+.broadcast-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(31, 85, 76, 0.25);
+  background: #fff8df;
+  box-shadow: var(--shadow);
+}
+
+.broadcast-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+}
+
+.broadcast-card strong {
+  font-weight: 900;
+}
+
+.broadcast-message {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.broadcast-message a {
+  color: var(--accent-strong);
+  font-weight: 850;
+}
+
+.broadcast-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.broadcast-seen {
+  min-height: 38px;
+  border-radius: 8px;
+  padding: 0 14px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 850;
+}
+
+.broadcast-form {
+  grid-template-columns: minmax(220px, 2fr) minmax(220px, 2fr) auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+
+.broadcast-form button {
+  min-height: 52px;
+  border-radius: 8px;
+  padding: 0 22px;
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 850;
+}
+
+.broadcast-target-field {
+  min-width: 0;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     gap: 14px;
@@ -1806,13 +2109,17 @@ textarea {
     scroll-snap-align: start;
   }
 
-  form {
+  form,
+  .broadcast-form {
     grid-template-columns: 1fr 1fr;
   }
 
   form label:first-child,
+  .broadcast-message-field,
+  .broadcast-target-field,
   .person-field,
-  .quick-add button {
+  .quick-add button,
+  .broadcast-form button {
     grid-column: 1 / -1;
   }
 }
@@ -1855,6 +2162,7 @@ const ACCOUNT_COLORS = ["#2f6f63", "#4b7fb8", "#d75b62", "#f1b84b", "#7a6fbe", "
 const state = {
   weekStart: startOfWeek(new Date()),
   tasks: [],
+  broadcasts: [],
   accounts: [],
   groups: [],
   adminPassword: "",
@@ -1863,7 +2171,11 @@ const state = {
   hostClockOffsetMs: 0,
   overviewResetTimer: null,
   taskFilter: sessionStorage.getItem("splanner.taskFilter") || "all",
+  lastActivityAt: Date.now(),
+  idleRefreshInFlight: false,
 };
+
+const IDLE_REFRESH_MS = 60 * 1000;
 
 const loginScreen = document.querySelector("#login-screen");
 const appShell = document.querySelector("#app-shell");
@@ -1881,6 +2193,10 @@ const taskHour = document.querySelector("#task-hour");
 const taskMinute = document.querySelector("#task-minute");
 const taskNote = document.querySelector("#task-note");
 const taskFilter = document.querySelector("#task-filter");
+const broadcastList = document.querySelector("#broadcast-list");
+const broadcastForm = document.querySelector("#broadcast-form");
+const broadcastMessage = document.querySelector("#broadcast-message");
+const broadcastTargets = document.querySelector("#broadcast-targets");
 const taskAssignees = document.querySelector("#task-assignees");
 const form = document.querySelector("#task-form");
 const memberRail = document.querySelector("#member-rail");
@@ -1913,6 +2229,7 @@ userLogin.addEventListener("submit", async (event) => {
   loginPin.value = "";
   loginMessage.textContent = "";
   await loadTasks();
+  await loadBroadcasts();
   showPlanner();
 });
 
@@ -1931,6 +2248,42 @@ taskFilter.addEventListener("change", () => {
   renderWeekGrid();
 });
 
+broadcastForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.isViewer || !state.currentUser) return;
+  const message = broadcastMessage.value.trim();
+  if (!message) return;
+
+  const response = await apiPost("/api/broadcasts", {
+    message,
+    targets: getSelectedBroadcastTargets().join(","),
+    requester: state.currentUser,
+    createdAt: new Date().toISOString(),
+  });
+  if (!response.ok) {
+    alert(response.error || "Could not send broadcast");
+    return;
+  }
+  state.broadcasts = normalizeBroadcasts(response.broadcasts);
+  broadcastForm.reset();
+  renderBroadcasts();
+});
+
+broadcastList.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-broadcast-seen]");
+  if (!button || state.isViewer || !state.currentUser) return;
+  const response = await apiPost("/api/broadcasts/seen", {
+    id: button.dataset.broadcastSeen,
+    requester: state.currentUser,
+  });
+  if (!response.ok) {
+    alert(response.error || "Could not mark broadcast seen");
+    return;
+  }
+  state.broadcasts = normalizeBroadcasts(response.broadcasts);
+  renderBroadcasts();
+});
+
 document.querySelector("#admin-open").addEventListener("click", () => openAdmin());
 document.querySelector("#login-admin-open").addEventListener("click", () => openAdmin());
 
@@ -1946,6 +2299,10 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     shiftWeek(1);
   }
+});
+
+["pointerdown", "keydown", "input", "change", "submit"].forEach((eventName) => {
+  document.addEventListener(eventName, recordActivity, true);
 });
 
 function openAdmin() {
@@ -2135,10 +2492,12 @@ async function init() {
   renderClock();
   setInterval(renderClock, 1000);
   setInterval(syncHostTime, 5 * 60 * 1000);
+  setInterval(refreshPlannerDataIfIdle, 5 * 1000);
   renderTimeSelectors();
   await loadAccounts();
   await loadGroups();
   await loadTasks();
+  await loadBroadcasts();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
     state.isViewer = isViewerAccount(state.currentUser);
     showPlanner();
@@ -2148,7 +2507,7 @@ async function init() {
   render();
 }
 
-async function loadTasks() {
+async function loadTasks(shouldRender = true) {
   try {
     state.tasks = normalizeTasks(await fetch("/api/tasks").then((response) => response.json()));
     if (!state.tasks.length) {
@@ -2157,7 +2516,37 @@ async function loadTasks() {
   } catch {
     state.tasks = [];
   }
-  renderWeekGrid();
+  if (shouldRender) renderWeekGrid();
+}
+
+async function loadBroadcasts(shouldRender = true) {
+  try {
+    state.broadcasts = normalizeBroadcasts(await fetch("/api/broadcasts").then((response) => response.json()));
+  } catch {
+    state.broadcasts = [];
+  }
+  if (shouldRender) renderBroadcasts();
+}
+
+async function refreshPlannerDataIfIdle() {
+  if (!state.currentUser || appShell.hidden || state.idleRefreshInFlight) return;
+  if (document.hidden) return;
+  if (Date.now() - state.lastActivityAt < IDLE_REFRESH_MS) return;
+
+  state.idleRefreshInFlight = true;
+  try {
+    await loadTasks(false);
+    await loadBroadcasts(false);
+    renderWeekGrid();
+    renderBroadcasts();
+    state.lastActivityAt = Date.now();
+  } finally {
+    state.idleRefreshInFlight = false;
+  }
+}
+
+function recordActivity() {
+  state.lastActivityAt = Date.now();
 }
 
 async function migrateLegacyTasks() {
@@ -2188,8 +2577,10 @@ async function loadGroups(groups = null) {
   state.groups = groups || await fetch("/api/groups").then((response) => response.json());
   renderGroupControls();
   renderPersonOptions();
+  renderBroadcastTargets();
   renderTaskFilter();
   renderWeekGrid();
+  renderBroadcasts();
 }
 
 async function syncHostTime() {
@@ -2224,8 +2615,10 @@ async function loadAccounts(accounts = null) {
   renderAccountControls();
   renderGroupControls();
   renderPersonOptions();
+  renderBroadcastTargets();
   renderTaskFilter();
   renderWeekGrid();
+  renderBroadcasts();
 }
 
 function render() {
@@ -2233,8 +2626,10 @@ function render() {
   renderWeekHeading();
   renderDayOptions();
   renderPersonOptions();
+  renderBroadcastTargets();
   renderTaskFilter();
   renderWeekGrid();
+  renderBroadcasts();
   renderAccountControls();
   renderGroupControls();
 }
@@ -2338,6 +2733,29 @@ function renderPersonOptions() {
     : `<span class="chip">No accounts or groups yet</span>`;
 }
 
+function renderBroadcastTargets() {
+  if (!broadcastTargets) return;
+  const personOptions = taskAccounts().map((name) => `
+      <label class="person-option">
+        <input type="checkbox" value="${escapeHtml(name)}">
+        <span>${escapeHtml(name)}</span>
+      </label>
+    `).join("");
+  const groupOptions = state.groups.map((group) => `
+      <label class="person-option">
+        <input type="checkbox" value="@${escapeHtml(group.name)}">
+        <span>${escapeHtml(group.name)}</span>
+      </label>
+    `).join("");
+  broadcastTargets.innerHTML = personOptions || groupOptions
+    ? `${personOptions}${groupOptions}`
+    : `<span class="chip">No accounts or groups yet</span>`;
+}
+
+function getSelectedBroadcastTargets() {
+  return Array.from(broadcastTargets.querySelectorAll("input:checked")).map((input) => input.value);
+}
+
 function renderTaskFilter() {
   const options = [{ value: "all", label: "Everyone" }];
   if (!state.isViewer && state.currentUser) {
@@ -2369,6 +2787,41 @@ function setAdminMode(isLoggedIn) {
   adminLogin.hidden = isLoggedIn;
   adminPanel.hidden = !isLoggedIn;
   renderAccountControls();
+}
+
+function renderBroadcasts() {
+  if (!broadcastList) return;
+  const broadcasts = visibleBroadcasts();
+  broadcastList.innerHTML = broadcasts.map(renderBroadcast).join("");
+}
+
+function renderBroadcast(broadcast) {
+  const targets = normalizeBroadcastTargets(broadcast);
+  const targetLabel = targets.length ? targets.join(", ") : "Everyone";
+  const seenCount = broadcastTargetPeople(broadcast).filter((name) => hasSeenBroadcast(broadcast, name)).length;
+  const targetCount = broadcastTargetPeople(broadcast).length;
+  const canMarkSeen = !state.isViewer && broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
+  return `
+    <article class="broadcast-card">
+      <header>
+        <strong>${escapeHtml(broadcast.requester || "Someone")} broadcasts</strong>
+        ${canMarkSeen ? `<button class="broadcast-seen" type="button" data-broadcast-seen="${escapeHtml(broadcast.id)}">Seen</button>` : ""}
+      </header>
+      <p class="broadcast-message">${linkifyNote(broadcast.message || "")}</p>
+      <div class="broadcast-meta">
+        <span class="chip">To: ${escapeHtml(targetLabel)}</span>
+        ${targetCount ? `<span class="chip">Seen: ${seenCount}/${targetCount}</span>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function visibleBroadcasts() {
+  return state.broadcasts.filter((broadcast) => {
+    if (broadcastIsComplete(broadcast)) return false;
+    if (state.isViewer) return true;
+    return broadcastAppliesToPerson(broadcast, state.currentUser) && !hasSeenBroadcast(broadcast, state.currentUser);
+  });
 }
 
 function renderWeekHeading() {
@@ -2436,6 +2889,64 @@ function renderTask(task, index) {
       <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : "No note added."}</div>
     </article>
   `;
+}
+
+function normalizeBroadcasts(broadcasts) {
+  return Array.isArray(broadcasts) ? broadcasts.map((broadcast) => ({
+    ...broadcast,
+    targets: normalizeBroadcastTargets(broadcast),
+    seenBy: normalizeSeenBy(broadcast),
+  })) : [];
+}
+
+function normalizeBroadcastTargets(broadcast) {
+  if (Array.isArray(broadcast.targets)) return broadcast.targets;
+  if (typeof broadcast.targets === "string") return broadcast.targets.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function normalizeSeenBy(broadcast) {
+  if (Array.isArray(broadcast.seenBy)) return broadcast.seenBy;
+  if (Array.isArray(broadcast.seen_by)) return broadcast.seen_by;
+  if (typeof broadcast.seenBy === "string") return broadcast.seenBy.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function hasSeenBroadcast(broadcast, name) {
+  return normalizeSeenBy(broadcast).some((seenName) => sameName(seenName, name));
+}
+
+function broadcastTargetPeople(broadcast) {
+  const targets = normalizeBroadcastTargets(broadcast);
+  const people = [];
+  const addPerson = (name) => {
+    if (!name || isSystemAccount(name)) return;
+    if (!people.some((existing) => sameName(existing, name))) people.push(name);
+  };
+
+  if (!targets.length) {
+    taskAccounts().forEach(addPerson);
+    return people;
+  }
+
+  targets.forEach((target) => {
+    if (target.startsWith("@")) {
+      const group = state.groups.find((candidate) => sameName(candidate.name, target.slice(1)));
+      if (group) group.members.forEach(addPerson);
+    } else {
+      addPerson(target);
+    }
+  });
+  return people;
+}
+
+function broadcastAppliesToPerson(broadcast, person) {
+  return broadcastTargetPeople(broadcast).some((name) => sameName(name, person));
+}
+
+function broadcastIsComplete(broadcast) {
+  const people = broadcastTargetPeople(broadcast);
+  return people.length > 0 && people.every((name) => hasSeenBroadcast(broadcast, name));
 }
 
 function taskMatchesCurrentFilter(task) {
