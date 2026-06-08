@@ -4,7 +4,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
-const ADDRESS: &str = "127.0.0.1:8100";
+const DEFAULT_ADDRESS: &str = "127.0.0.1:8100";
+const BIND_ADDRESS_FILE: &str = "data/bind_address.txt";
 const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const DEFAULT_ACCOUNTS: &[&str] = &["Maya", "Dad", "Mum", "Sam"];
@@ -32,8 +33,9 @@ fn main() -> std::io::Result<()> {
     }
 
     ensure_accounts_file()?;
-    let listener = TcpListener::bind(ADDRESS)?;
-    println!("Splanner is running at http://{ADDRESS}");
+    let address = read_bind_address();
+    let listener = TcpListener::bind(&address)?;
+    println!("Splanner is running at http://{address}");
 
     for stream in listener.incoming() {
         match stream {
@@ -247,6 +249,14 @@ fn ensure_accounts_file() -> std::io::Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn read_bind_address() -> String {
+    fs::read_to_string(BIND_ADDRESS_FILE)
+        .map(|address| address.trim().to_string())
+        .ok()
+        .filter(|address| !address.is_empty())
+        .unwrap_or_else(|| DEFAULT_ADDRESS.to_string())
 }
 
 fn read_accounts() -> Vec<String> {
