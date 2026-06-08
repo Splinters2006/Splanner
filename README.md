@@ -31,6 +31,10 @@ Groups are also managed from the admin cogwheel. Admins can create groups and
 add or remove people from them. Groups appear next to people when assigning a
 task.
 
+Create an account named `viewer` for living-room tablet display mode. When that
+account logs in, Splanner shows only the current week and hides navigation,
+admin, delete, and task-entry controls.
+
 `./Splanner.sh update` pulls the latest git changes, rebuilds the release
 binary, and restarts the systemd service without repeating the admin password or
 UPnP setup prompts.

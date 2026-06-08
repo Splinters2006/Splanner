@@ -798,6 +798,10 @@ const STYLES_CSS: &str = r#":root {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   min-height: 100%;
@@ -850,6 +854,25 @@ button {
   grid-template-rows: auto 1fr auto;
   gap: 18px;
   padding: clamp(16px, 3vw, 32px);
+}
+
+.viewer-mode {
+  grid-template-rows: auto 1fr;
+}
+
+.viewer-mode .week-actions,
+.viewer-mode .quick-add,
+.viewer-mode .member-rail,
+.viewer-mode .task-actions {
+  display: none;
+}
+
+.viewer-mode .planner-stage {
+  grid-template-columns: 1fr;
+}
+
+.viewer-mode .day-column {
+  min-height: 70vh;
 }
 
 .topbar {
@@ -1411,6 +1434,7 @@ const state = {
   groups: [],
   adminPassword: "",
   currentUser: sessionStorage.getItem("splanner.currentUser") || "",
+  isViewer: false,
   hostClockOffsetMs: 0,
 };
 
@@ -1453,6 +1477,7 @@ userLogin.addEventListener("submit", async (event) => {
     return;
   }
   state.currentUser = response.name;
+  state.isViewer = isViewerAccount(response.name);
   sessionStorage.setItem("splanner.currentUser", state.currentUser);
   loginPin.value = "";
   loginMessage.textContent = "";
@@ -1589,6 +1614,7 @@ groupList.addEventListener("click", async (event) => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (state.isViewer) return;
   const data = new FormData(form);
   const title = data.get("title").trim();
   if (!title) return;
@@ -1610,6 +1636,7 @@ form.addEventListener("submit", (event) => {
 });
 
 grid.addEventListener("click", (event) => {
+  if (state.isViewer) return;
   const button = event.target.closest("[data-delete]");
   if (!button) return;
   state.tasks = state.tasks.filter((task) => task.id !== button.dataset.delete);
@@ -1626,6 +1653,7 @@ grid.addEventListener("pointerdown", (event) => {
 });
 
 grid.addEventListener("pointerup", (event) => {
+  if (state.isViewer) return;
   const xDelta = event.clientX - swipeStartX;
   const yDelta = event.clientY - swipeStartY;
   if (Math.abs(xDelta) < 110 || Math.abs(xDelta) < Math.abs(yDelta) * 1.3) return;
@@ -1642,6 +1670,7 @@ async function init() {
   await loadAccounts();
   await loadGroups();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
+    state.isViewer = isViewerAccount(state.currentUser);
     showPlanner();
   } else {
     showLogin();
@@ -1680,6 +1709,7 @@ async function loadAccounts(accounts = null) {
   state.accounts = accounts || await fetch("/api/accounts").then((response) => response.json());
   if (!state.accounts.includes(state.currentUser)) {
     state.currentUser = "";
+    state.isViewer = false;
     sessionStorage.removeItem("splanner.currentUser");
   }
   renderLoginOptions();
@@ -1707,9 +1737,18 @@ function showLogin() {
 }
 
 function showPlanner() {
+  state.isViewer = isViewerAccount(state.currentUser);
+  appShell.classList.toggle("viewer-mode", state.isViewer);
+  if (state.isViewer) {
+    state.weekStart = startOfWeek(hostNow());
+  }
   loginScreen.hidden = true;
   appShell.hidden = false;
   render();
+}
+
+function isViewerAccount(name) {
+  return String(name).trim().toLowerCase() === "viewer";
 }
 
 function renderLoginOptions() {
@@ -1872,6 +1911,11 @@ async function apiPost(url, payload) {
 }
 
 function shiftWeek(amount) {
+  if (state.isViewer) {
+    state.weekStart = startOfWeek(hostNow());
+    render();
+    return;
+  }
   state.weekStart = addDays(state.weekStart, amount * 7);
   render();
 }
