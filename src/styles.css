@@ -334,6 +334,17 @@ h3 {
   color: #fff;
 }
 
+.event-time-chip {
+  align-items: flex-start;
+  flex-basis: 100%;
+  line-height: 1.18;
+  min-height: 0;
+  padding: 7px 10px;
+  border-radius: 16px;
+  white-space: normal;
+  word-break: normal;
+}
+
 .task-actions {
   display: flex;
   justify-content: flex-end;

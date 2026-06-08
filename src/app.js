@@ -441,7 +441,6 @@ async function init() {
   setInterval(renderClock, 1000);
   setInterval(syncHostTime, 5 * 60 * 1000);
   setInterval(refreshPlannerDataIfIdle, 5 * 1000);
-  renderTimeSelectors();
   await loadAccounts();
   await loadGroups();
   await loadTasks();
@@ -950,7 +949,7 @@ function renderEvent(event, index) {
     <article class="event-card ${note ? "has-note" : ""}" data-tone="${index % 4}">
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
-        <span class="chip time-chip">${escapeHtml(formatEventTime(event))}</span>
+        <span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>
         <span class="chip">${escapeHtml(assignee)}</span>
         <span class="chip">${escapeHtml(requester)}</span>
       </div>
@@ -1122,16 +1121,6 @@ function markOverviewInteraction() {
     state.weekStart = startOfWeek(hostNow());
     render();
   }, 10 * 60 * 1000);
-}
-
-function renderTimeSelectors() {
-  [eventStartMinute, eventEndMinute].forEach((select) => {
-    if (!select) return;
-    select.innerHTML = Array.from({ length: 12 }, (_, index) => {
-      const value = String(index * 5).padStart(2, "0");
-      return `<option value="${value}">${value}</option>`;
-    }).join("");
-  });
 }
 
 function selectedTimeValue(hourInput, minuteSelect, label) {
