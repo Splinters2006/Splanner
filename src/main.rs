@@ -658,6 +658,7 @@ fn parse_group_line(line: &str, accounts: &[Account]) -> Option<Group> {
     Some(Group { name, members })
 }
 
+
 fn read_tasks() -> Vec<Task> {
     fs::read_to_string(TASKS_FILE)
         .unwrap_or_default()
@@ -707,19 +708,10 @@ fn parse_task_line(line: &str) -> Option<Task> {
     let requester = sanitize_account_name(parts[5]);
     let created_at = sanitize_task_text(parts[6], 40);
 
-    if id.is_empty() || title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time)
-    {
+    if id.is_empty() || title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time) {
         None
     } else {
-        Some(Task {
-            id,
-            title,
-            date,
-            time,
-            assignees,
-            requester,
-            created_at,
-        })
+        Some(Task { id, title, date, time, assignees, requester, created_at })
     }
 }
 
@@ -774,10 +766,7 @@ fn sanitize_task_text(value: &str, max_len: usize) -> String {
 }
 
 fn is_valid_task_requester(name: &str) -> bool {
-    is_overview_account(name)
-        || read_accounts()
-            .iter()
-            .any(|account| same_name(&account.name, name))
+    is_overview_account(name) || read_accounts().iter().any(|account| same_name(&account.name, name))
 }
 
 fn is_valid_date_key(value: &str) -> bool {
@@ -785,10 +774,9 @@ fn is_valid_date_key(value: &str) -> bool {
     bytes.len() == 10
         && bytes[4] == b'-'
         && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7) || byte.is_ascii_digit()
+        })
 }
 
 fn is_valid_time_value(value: &str) -> bool {
