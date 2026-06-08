@@ -166,10 +166,12 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         ("POST", "/api/groups/delete") => handle_delete_group(&parsed.body),
         ("POST", "/api/groups/member") => handle_group_member(&parsed.body),
         ("POST", "/api/tasks") => handle_add_task(&parsed.body),
+        ("POST", "/api/tasks/note") => handle_update_task_note(&parsed.body),
         ("POST", "/api/tasks/delete") => handle_delete_task(&parsed.body),
         ("POST", "/api/broadcasts") => handle_add_broadcast(&parsed.body),
         ("POST", "/api/broadcasts/seen") => handle_mark_broadcast_seen(&parsed.body),
         ("POST", "/api/events") => handle_add_event(&parsed.body),
+        ("POST", "/api/events/note") => handle_update_event_note(&parsed.body),
         ("POST", "/api/events/delete") => handle_delete_event(&parsed.body),
         _ => (
             "404 Not Found",
@@ -529,6 +531,37 @@ fn handle_delete_task(body: &str) -> (&'static str, &'static str, String) {
     )
 }
 
+fn handle_update_task_note(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 100);
+    let note = sanitize_note_text(&json_field(body, "note").unwrap_or_default(), 2000);
+    let mut tasks = read_tasks();
+    let Some(task) = tasks.iter_mut().find(|task| task.id == id) else {
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown task"}"#);
+    };
+
+    if !same_name(&task.requester, &requester) {
+        return json_response(
+            "403 Forbidden",
+            r#"{"ok":false,"error":"Only the task creator can edit the note"}"#,
+        );
+    }
+
+    task.note = note;
+    if let Err(error) = write_tasks(&tasks) {
+        return server_error(&error.to_string());
+    }
+
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"tasks":{}}}"#, tasks_json(&tasks)),
+    )
+}
+
 fn handle_add_broadcast(body: &str) -> (&'static str, &'static str, String) {
     let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
     if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
@@ -685,6 +718,37 @@ fn handle_delete_event(body: &str) -> (&'static str, &'static str, String) {
     }
 
     let events = read_events();
+    json_response(
+        "200 OK",
+        &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&events)),
+    )
+}
+
+fn handle_update_event_note(body: &str) -> (&'static str, &'static str, String) {
+    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
+    if !is_valid_task_requester(&requester) || is_overview_account(&requester) {
+        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
+    }
+
+    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 100);
+    let note = sanitize_note_text(&json_field(body, "note").unwrap_or_default(), 2000);
+    let mut events = read_events();
+    let Some(event) = events.iter_mut().find(|event| event.id == id) else {
+        return json_response("404 Not Found", r#"{"ok":false,"error":"Unknown event"}"#);
+    };
+
+    if !same_name(&event.requester, &requester) {
+        return json_response(
+            "403 Forbidden",
+            r#"{"ok":false,"error":"Only the event creator can edit the note"}"#,
+        );
+    }
+
+    event.note = note;
+    if let Err(error) = write_events(&events) {
+        return server_error(&error.to_string());
+    }
+
     json_response(
         "200 OK",
         &format!(r#"{{"ok":true,"events":{}}}"#, events_json(&events)),

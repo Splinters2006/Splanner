@@ -360,7 +360,7 @@ h3 {
   min-height: 0;
   overflow: hidden;
   padding: 8px;
-  border-radius: 0;
+  border-radius: 4px;
   z-index: 1;
 }
 
@@ -494,16 +494,6 @@ h3 {
 .task-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.delete-task {
-  width: 38px;
-  min-height: 34px;
-  border-radius: 0;
-  background: #edf1ef;
-  color: var(--muted);
-  font-size: 1.35rem;
-  line-height: 1;
 }
 
 .empty-day {
@@ -742,6 +732,21 @@ select {
   font-weight: 750;
 }
 
+.note-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.danger-button {
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 16px;
+  background: var(--rose);
+  color: #fff;
+  font-weight: 850;
+}
+
 .dialog-header {
   display: flex;
   align-items: center;
@@ -859,7 +864,7 @@ textarea {
 }
 
 .task-card.timeline-task {
-  border-radius: 0;
+  border-radius: 4px;
   min-height: 0;
   padding: 8px;
 }
@@ -1167,7 +1172,7 @@ textarea {
 }
 
 .event-card.timeline-event {
-  border-radius: 0;
+  border-radius: 4px;
   min-height: 0;
   padding: 8px;
 }
@@ -1192,17 +1197,6 @@ textarea {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-}
-
-.delete-event,
-.delete-task {
-  width: 38px;
-  min-height: 34px;
-  border-radius: 0;
-  background: #edf1ef;
-  color: var(--muted);
-  font-size: 1.35rem;
-  line-height: 1;
 }
 
 .broadcast-seen {

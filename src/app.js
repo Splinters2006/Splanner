@@ -73,6 +73,7 @@ const noteDialog = document.querySelector("#note-dialog");
 const noteDialogTitle = document.querySelector("#note-dialog-title");
 const noteDialogBody = document.querySelector("#note-dialog-body");
 const noteDialogClose = document.querySelector("#note-dialog-close");
+const noteDialogDelete = document.querySelector("#note-dialog-delete");
 
 [taskAssignees, eventAssignees, broadcastTargets].forEach((container) => {
   if (!container) return;
@@ -383,37 +384,6 @@ eventForm.addEventListener("submit", async (event) => {
 });
 
 grid.addEventListener("click", async (event) => {
-  const eventDeleteButton = event.target.closest("[data-event-delete]");
-  if (eventDeleteButton) {
-    const response = await apiPost("/api/events/delete", {
-      id: eventDeleteButton.dataset.eventDelete,
-      requester: state.currentUser,
-    });
-    if (!response.ok) {
-      alert(response.error || "You cannot delete this event");
-      return;
-    }
-    state.events = normalizeEvents(response.events);
-    await loadEvents(false);
-    render();
-    return;
-  }
-
-  const button = event.target.closest("[data-delete]");
-  if (button) {
-    const response = await apiPost("/api/tasks/delete", {
-      id: button.dataset.delete,
-      requester: state.currentUser,
-    });
-    if (!response.ok) {
-      alert(response.error || "You cannot delete this task");
-      return;
-    }
-    state.tasks = normalizeTasks(response.tasks);
-    render();
-    return;
-  }
-
   const detailCard = event.target.closest("[data-detail-kind]");
   if (detailCard) {
     openNoteDialog(detailCard.dataset.detailKind, detailCard.dataset.detailId);
@@ -421,6 +391,8 @@ grid.addEventListener("click", async (event) => {
 });
 
 noteDialogClose.addEventListener("click", () => closeNoteDialog());
+
+noteDialogDelete.addEventListener("click", async () => deleteOpenDetailItem());
 
 noteDialog.addEventListener("click", (event) => {
   if (event.target === noteDialog) closeNoteDialog();
@@ -956,7 +928,6 @@ function renderTimelineHours(showLabels) {
 
 function renderTask(task, index, dateKey = null) {
   const note = String(task.note || task.notes || "").trim();
-  const canDelete = canDeleteTask(task);
   const position = dateKey && task.time ? taskTimelinePosition(task) : null;
   const timelineStyle = position
     ? ` style="--task-top:${position.top}; --task-height:${position.height};"`
@@ -969,7 +940,6 @@ function renderTask(task, index, dateKey = null) {
         ${task.time && !dateKey ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
       </div>
       <div class="task-actions">
-        ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
     </article>
   `;
@@ -992,9 +962,14 @@ function openNoteDialog(kind, id) {
   const note = String(item.note || item.notes || "").trim();
   if (!note && kind !== "task") return;
   noteDialogTitle.textContent = item.title || "Note";
-  noteDialogBody.innerHTML = kind === "task"
-    ? renderTaskDetails(item, note)
-    : linkifyNote(note);
+  noteDialogBody.innerHTML = kind === "event"
+    ? renderEventDetails(item, note)
+    : renderTaskDetails(item, note);
+  noteDialog.dataset.detailKind = kind;
+  noteDialog.dataset.detailId = id;
+  const canDelete = kind === "event" ? canDeleteEvent(item) : canDeleteTask(item);
+  noteDialogDelete.hidden = !canDelete;
+  noteDialogDelete.textContent = kind === "event" ? "Delete event" : "Delete task";
   if (typeof noteDialog.showModal === "function") {
     noteDialog.showModal();
   } else {
@@ -1003,6 +978,8 @@ function openNoteDialog(kind, id) {
 }
 
 function closeNoteDialog() {
+  delete noteDialog.dataset.detailKind;
+  delete noteDialog.dataset.detailId;
   if (typeof noteDialog.close === "function") {
     noteDialog.close();
   } else {
@@ -1010,12 +987,38 @@ function closeNoteDialog() {
   }
 }
 
+async function deleteOpenDetailItem() {
+  const kind = noteDialog.dataset.detailKind;
+  const id = noteDialog.dataset.detailId;
+  if (!kind || !id) return;
+  const response = kind === "event"
+    ? await apiPost("/api/events/delete", { id, requester: state.currentUser })
+    : await apiPost("/api/tasks/delete", { id, requester: state.currentUser });
+  if (!response.ok) {
+    alert(response.error || `You cannot delete this ${kind}`);
+    return;
+  }
+  if (kind === "event") {
+    state.events = normalizeEvents(response.events);
+    await loadEvents(false);
+  } else {
+    state.tasks = normalizeTasks(response.tasks);
+  }
+  closeNoteDialog();
+  render();
+}
+
 function renderTaskDetails(task, note) {
   const assignees = normalizeAssignees(task);
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = task.requester || "unknown";
+  const time = task.time ? `Due ${formatTaskTime(task.time)}` : "No time";
   return `
     <dl class="note-detail-list">
+      <div>
+        <dt>Time</dt>
+        <dd>${escapeHtml(time)}</dd>
+      </div>
       <div>
         <dt>For</dt>
         <dd>${escapeHtml(assignee)}</dd>
@@ -1030,11 +1033,7 @@ function renderTaskDetails(task, note) {
 }
 
 function renderEvent(event, index, dateKey = null) {
-  const assignees = normalizeAssignees(event);
-  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
-  const requester = event.requester ? `by: ${event.requester}` : "by: unknown";
   const note = String(event.note || event.notes || "").trim();
-  const canDelete = canDeleteEvent(event);
   const position = dateKey ? eventTimelinePosition(event, dateKey) : null;
   const timelineStyle = position
     ? ` style="--event-top:${position.top}; --event-height:${position.height};"`
@@ -1044,14 +1043,33 @@ function renderEvent(event, index, dateKey = null) {
     <article class="event-card ${dateKey ? "timeline-event" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}" data-detail-kind="event" data-detail-id="${escapeHtml(event.id)}"${timelineStyle}>
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
-        ${!dateKey ? `<span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>` : ""}
-        <span class="chip">${escapeHtml(assignee)}</span>
-        <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="event-actions">
-        ${canDelete ? `<button class="delete-event" type="button" data-event-delete="${escapeHtml(event.id)}" aria-label="Remove ${escapeHtml(event.title)}">&times;</button>` : ""}
       </div>
     </article>
+  `;
+}
+
+function renderEventDetails(event, note) {
+  const assignees = normalizeAssignees(event);
+  const assignee = assignees.length ? assignees.join(", ") : "Anyone";
+  const requester = event.requester || "unknown";
+  return `
+    <dl class="note-detail-list">
+      <div>
+        <dt>Time</dt>
+        <dd>${escapeHtml(formatEventTime(event))}</dd>
+      </div>
+      <div>
+        <dt>For</dt>
+        <dd>${escapeHtml(assignee)}</dd>
+      </div>
+      <div>
+        <dt>By</dt>
+        <dd>${escapeHtml(requester)}</dd>
+      </div>
+    </dl>
+    ${note ? `<div class="note-detail-text">${linkifyNote(note)}</div>` : `<p class="note-detail-empty">No note</p>`}
   `;
 }
 
@@ -1150,14 +1168,13 @@ function broadcastIsComplete(broadcast) {
 function taskMatchesCurrentFilter(task) {
   const filter = state.taskFilter || "all";
   if (filter === "all") return true;
-  const assignees = normalizeAssignees(task);
   if (filter.startsWith("person:")) {
     const person = filter.slice("person:".length);
     return taskAppliesToPerson(task, person);
   }
   if (filter.startsWith("group:")) {
     const group = filter.slice("group:".length);
-    return assignees.some((assignee) => sameName(assignee, `@${group}`));
+    return taskAppliesToGroup(task, group);
   }
   return true;
 }
@@ -1167,10 +1184,21 @@ function taskAppliesToPerson(task, person) {
   if (!assignees.length) return true;
   return assignees.some((assignee) => {
     if (assignee.startsWith("@")) {
-      const group = state.groups.find((candidate) => sameName(candidate.name, assignee.slice(1)));
-      return group ? group.members.some((member) => sameName(member, person)) : false;
+      return resolveGroupMembers(assignee.slice(1)).some((member) => sameName(member, person));
     }
     return sameName(assignee, person);
+  });
+}
+
+function taskAppliesToGroup(task, groupName) {
+  const assignees = normalizeAssignees(task);
+  if (!assignees.length) return true;
+  const groupMembers = resolveGroupMembers(groupName);
+  return assignees.some((assignee) => {
+    if (assignee.startsWith("@")) {
+      return sameName(assignee.slice(1), groupName);
+    }
+    return groupMembers.some((member) => sameName(member, assignee));
   });
 }
 
