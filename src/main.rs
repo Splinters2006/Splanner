@@ -10,7 +10,6 @@ const BIND_ADDRESS_FILE: &str = "data/bind_address.txt";
 const ADMIN_PASSWORD_FILE: &str = "data/admin_password.txt";
 const ACCOUNTS_FILE: &str = "data/accounts.txt";
 const GROUPS_FILE: &str = "data/groups.txt";
-const TASKS_FILE: &str = "data/tasks.txt";
 const HASH_SALT: &str = "splanner-local-admin-v1";
 const OVERVIEW_ACCOUNT: &str = "overview";
 
@@ -24,17 +23,6 @@ struct Account {
 struct Group {
     name: String,
     members: Vec<String>,
-}
-
-#[derive(Clone)]
-struct Task {
-    id: String,
-    title: String,
-    date: String,
-    time: String,
-    assignees: Vec<String>,
-    requester: String,
-    created_at: String,
 }
 
 fn main() -> std::io::Result<()> {
@@ -55,14 +43,12 @@ fn main() -> std::io::Result<()> {
         set_admin_password(password)?;
         ensure_accounts_file()?;
         ensure_groups_file()?;
-        ensure_tasks_file()?;
         println!("Admin password saved.");
         return Ok(());
     }
 
     ensure_accounts_file()?;
     ensure_groups_file()?;
-    ensure_tasks_file()?;
     let address = read_bind_address();
     let listener = TcpListener::bind(&address)?;
     println!("Splanner is running at http://{address}");
@@ -112,11 +98,6 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
             "application/json; charset=utf-8",
             host_time_json(),
         ),
-        ("GET", "/api/tasks") => (
-            "200 OK",
-            "application/json; charset=utf-8",
-            tasks_json(&read_tasks()),
-        ),
         ("POST", "/api/admin/login") => handle_admin_login(&parsed.body),
         ("POST", "/api/user/login") => handle_user_login(&parsed.body),
         ("POST", "/api/accounts") => handle_add_account(&parsed.body),
@@ -124,8 +105,6 @@ fn handle_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         ("POST", "/api/groups") => handle_add_group(&parsed.body),
         ("POST", "/api/groups/delete") => handle_delete_group(&parsed.body),
         ("POST", "/api/groups/member") => handle_group_member(&parsed.body),
-        ("POST", "/api/tasks") => handle_add_task(&parsed.body),
-        ("POST", "/api/tasks/delete") => handle_delete_task(&parsed.body),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -410,63 +389,6 @@ fn handle_user_login(body: &str) -> (&'static str, &'static str, String) {
     }
 }
 
-fn handle_add_task(body: &str) -> (&'static str, &'static str, String) {
-    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
-    if !is_valid_task_requester(&requester) {
-        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
-    }
-
-    let title = sanitize_task_text(&json_field(body, "title").unwrap_or_default(), 80);
-    let date = json_field(body, "date").unwrap_or_default();
-    let time = json_field(body, "time").unwrap_or_default();
-    let created_at = sanitize_task_text(&json_field(body, "createdAt").unwrap_or_default(), 40);
-    let assignees = parse_assignees_field(&json_field(body, "assignees").unwrap_or_default());
-
-    if title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time) {
-        return json_response("400 Bad Request", r#"{"ok":false,"error":"Invalid task"}"#);
-    }
-
-    let mut tasks = read_tasks();
-    tasks.push(Task {
-        id: create_server_id(),
-        title,
-        date,
-        time,
-        assignees,
-        requester,
-        created_at,
-    });
-
-    if let Err(error) = write_tasks(&tasks) {
-        return server_error(&error.to_string());
-    }
-
-    json_response(
-        "200 OK",
-        &format!(r#"{{"ok":true,"tasks":{}}}"#, tasks_json(&tasks)),
-    )
-}
-
-fn handle_delete_task(body: &str) -> (&'static str, &'static str, String) {
-    let requester = sanitize_account_name(&json_field(body, "requester").unwrap_or_default());
-    if !is_valid_task_requester(&requester) {
-        return json_response("401 Unauthorized", r#"{"ok":false,"error":"Unknown user"}"#);
-    }
-
-    let id = sanitize_task_text(&json_field(body, "id").unwrap_or_default(), 80);
-    let mut tasks = read_tasks();
-    tasks.retain(|task| task.id != id);
-
-    if let Err(error) = write_tasks(&tasks) {
-        return server_error(&error.to_string());
-    }
-
-    json_response(
-        "200 OK",
-        &format!(r#"{{"ok":true,"tasks":{}}}"#, tasks_json(&tasks)),
-    )
-}
-
 fn json_response(status: &'static str, body: &str) -> (&'static str, &'static str, String) {
     (status, "application/json; charset=utf-8", body.to_string())
 }
@@ -536,14 +458,6 @@ fn ensure_groups_file() -> std::io::Result<()> {
     ensure_data_dir()?;
     if !Path::new(GROUPS_FILE).exists() {
         fs::write(GROUPS_FILE, "")?;
-    }
-    Ok(())
-}
-
-fn ensure_tasks_file() -> std::io::Result<()> {
-    ensure_data_dir()?;
-    if !Path::new(TASKS_FILE).exists() {
-        fs::write(TASKS_FILE, "")?;
     }
     Ok(())
 }
@@ -656,163 +570,6 @@ fn parse_group_line(line: &str, accounts: &[Account]) -> Option<Group> {
             list
         });
     Some(Group { name, members })
-}
-
-fn read_tasks() -> Vec<Task> {
-    fs::read_to_string(TASKS_FILE)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(parse_task_line)
-        .collect()
-}
-
-fn write_tasks(tasks: &[Task]) -> std::io::Result<()> {
-    ensure_data_dir()?;
-    let body = tasks
-        .iter()
-        .map(|task| {
-            format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                task.id,
-                task.title,
-                task.date,
-                task.time,
-                task.assignees.join(","),
-                task.requester,
-                task.created_at
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(
-        TASKS_FILE,
-        if body.is_empty() {
-            body
-        } else {
-            format!("{body}\n")
-        },
-    )
-}
-
-fn parse_task_line(line: &str) -> Option<Task> {
-    let parts = line.split('\t').collect::<Vec<_>>();
-    if parts.len() != 7 {
-        return None;
-    }
-    let id = sanitize_task_text(parts[0], 80);
-    let title = sanitize_task_text(parts[1], 80);
-    let date = parts[2].to_string();
-    let time = parts[3].to_string();
-    let assignees = parse_assignees_field(parts[4]);
-    let requester = sanitize_account_name(parts[5]);
-    let created_at = sanitize_task_text(parts[6], 40);
-
-    if id.is_empty() || title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time)
-    {
-        None
-    } else {
-        Some(Task {
-            id,
-            title,
-            date,
-            time,
-            assignees,
-            requester,
-            created_at,
-        })
-    }
-}
-
-fn tasks_json(tasks: &[Task]) -> String {
-    format!(
-        "[{}]",
-        tasks
-            .iter()
-            .map(|task| {
-                format!(
-                    r#"{{"id":"{}","title":"{}","date":"{}","time":"{}","assignees":{},"requester":"{}","createdAt":"{}"}}"#,
-                    escape_json(&task.id),
-                    escape_json(&task.title),
-                    escape_json(&task.date),
-                    escape_json(&task.time),
-                    string_array_json(&task.assignees),
-                    escape_json(&task.requester),
-                    escape_json(&task.created_at)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-}
-
-fn parse_assignees_field(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|name| {
-            if let Some(group_name) = name.trim().strip_prefix('@') {
-                format!("@{}", sanitize_account_name(group_name))
-            } else {
-                sanitize_account_name(name)
-            }
-        })
-        .filter(|name| !name.is_empty() && name != "@")
-        .fold(Vec::<String>::new(), |mut list, name| {
-            if !list.iter().any(|existing| same_name(existing, &name)) {
-                list.push(name);
-            }
-            list
-        })
-}
-
-fn sanitize_task_text(value: &str, max_len: usize) -> String {
-    value
-        .trim()
-        .chars()
-        .filter(|character| !matches!(character, '\t' | '\n' | '\r'))
-        .take(max_len)
-        .collect()
-}
-
-fn is_valid_task_requester(name: &str) -> bool {
-    is_overview_account(name)
-        || read_accounts()
-            .iter()
-            .any(|account| same_name(&account.name, name))
-}
-
-fn is_valid_date_key(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
-}
-
-fn is_valid_time_value(value: &str) -> bool {
-    if value.is_empty() {
-        return true;
-    }
-    let Some((hour, minute)) = value.split_once(':') else {
-        return false;
-    };
-    let Ok(hour) = hour.parse::<u8>() else {
-        return false;
-    };
-    let Ok(minute) = minute.parse::<u8>() else {
-        return false;
-    };
-    hour < 24 && minute < 60
-}
-
-fn create_server_id() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("task-{now}")
 }
 
 fn remove_account_from_groups(account_name: &str) {
@@ -943,7 +700,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </label>
       <label>
         <span>PIN</span>
-        <input id="login-pin" name="pin" inputmode="numeric" required>
+        <input id="login-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" required>
       </label>
       <button type="submit">Open planner</button>
       <button id="login-admin-open" class="plain-button" type="button">Admin settings</button>
@@ -986,8 +743,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <select id="task-day" name="day"></select>
         </label>
         <label>
-          <span>Time/by</span>
-          <input id="task-time" name="time" type="time">
+          <span>Hour</span>
+          <select id="task-hour" name="hour"></select>
+        </label>
+        <label>
+          <span>Minute</span>
+          <select id="task-minute" name="minute"></select>
         </label>
         <fieldset class="person-field">
           <legend>For</legend>
@@ -1024,7 +785,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </label>
         <label>
           <span>PIN</span>
-          <input id="account-pin" name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="1234">
+          <input id="account-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4}" maxlength="4" required placeholder="1234">
         </label>
         <button type="submit">Add account</button>
       </form>
@@ -1131,10 +892,10 @@ button {
   grid-template-rows: auto 1fr;
 }
 
-.viewer-mode .week-actions,
 .viewer-mode .quick-add,
 .viewer-mode .member-rail,
-.viewer-mode .task-actions {
+.viewer-mode .task-actions,
+.viewer-mode .admin-cog {
   display: none;
 }
 
@@ -1441,7 +1202,7 @@ h3 {
 
 form {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(110px, 1fr) minmax(220px, 2fr) auto;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) minmax(100px, 0.7fr) minmax(100px, 0.7fr) minmax(220px, 2fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -1695,17 +1456,19 @@ select {
 }
 "#;
 
-const APP_JS: &str = r##"const ACCOUNT_COLORS = ["#2f6f63", "#4b7fb8", "#d75b62", "#f1b84b", "#7a6fbe", "#bf6b45"];
+const APP_JS: &str = r##"const STORAGE_KEY = "splanner.tasks.v1";
+const ACCOUNT_COLORS = ["#2f6f63", "#4b7fb8", "#d75b62", "#f1b84b", "#7a6fbe", "#bf6b45"];
 
 const state = {
   weekStart: startOfWeek(new Date()),
-  tasks: [],
+  tasks: loadTasks(),
   accounts: [],
   groups: [],
   adminPassword: "",
   currentUser: sessionStorage.getItem("splanner.currentUser") || "",
   isViewer: false,
   hostClockOffsetMs: 0,
+  overviewResetTimer: null,
 };
 
 const loginScreen = document.querySelector("#login-screen");
@@ -1720,6 +1483,8 @@ const weekRange = document.querySelector("#week-range");
 const hostTime = document.querySelector("#host-time");
 const hostDate = document.querySelector("#host-date");
 const taskDay = document.querySelector("#task-day");
+const taskHour = document.querySelector("#task-hour");
+const taskMinute = document.querySelector("#task-minute");
 const taskAssignees = document.querySelector("#task-assignees");
 const form = document.querySelector("#task-form");
 const memberRail = document.querySelector("#member-rail");
@@ -1757,6 +1522,7 @@ userLogin.addEventListener("submit", async (event) => {
 document.querySelector("#prev-week").addEventListener("click", () => shiftWeek(-1));
 document.querySelector("#next-week").addEventListener("click", () => shiftWeek(1));
 document.querySelector("#today").addEventListener("click", () => {
+  markOverviewInteraction();
   state.weekStart = startOfWeek(hostNow());
   render();
 });
@@ -1767,6 +1533,20 @@ document.querySelector("#admin-open").addEventListener("click", () => {
 
 document.querySelector("#login-admin-open").addEventListener("click", () => {
   openAdmin();
+});
+
+document.addEventListener("keydown", (event) => {
+  const target = event.target;
+  const tagName = target && target.tagName ? target.tagName.toLowerCase() : "";
+  if (["input", "textarea", "select", "button"].includes(tagName) || (target && target.isContentEditable)) return;
+
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    shiftWeek(-1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    shiftWeek(1);
+  }
 });
 
 function openAdmin() {
@@ -1882,39 +1662,36 @@ groupList.addEventListener("click", async (event) => {
   await loadGroups(response.groups);
 });
 
-form.addEventListener("submit", async (event) => {
+form.addEventListener("submit", (event) => {
   event.preventDefault();
   if (state.isViewer) return;
   const data = new FormData(form);
   const title = data.get("title").trim();
   if (!title) return;
 
-  const response = await apiPost("/api/tasks", {
+  state.tasks.push({
+    id: createId(),
     title,
     date: data.get("day"),
-    time: data.get("time"),
-    assignees: getSelectedAssignees().join(","),
+    time: selectedTimeValue(),
+    assignees: getSelectedAssignees(),
     requester: state.currentUser,
     createdAt: new Date().toISOString(),
   });
-  if (!response.ok) return;
-  state.tasks = response.tasks;
 
+  saveTasks();
   form.reset();
   taskDay.value = toDateKey(hostNow());
+  setDefaultTaskTime();
   render();
 });
 
-grid.addEventListener("click", async (event) => {
+grid.addEventListener("click", (event) => {
   if (state.isViewer) return;
   const button = event.target.closest("[data-delete]");
   if (!button) return;
-  const response = await apiPost("/api/tasks/delete", {
-    id: button.dataset.delete,
-    requester: state.currentUser,
-  });
-  if (!response.ok) return;
-  state.tasks = response.tasks;
+  state.tasks = state.tasks.filter((task) => task.id !== button.dataset.delete);
+  saveTasks();
   render();
 });
 
@@ -1927,7 +1704,6 @@ grid.addEventListener("pointerdown", (event) => {
 });
 
 grid.addEventListener("pointerup", (event) => {
-  if (state.isViewer) return;
   const xDelta = event.clientX - swipeStartX;
   const yDelta = event.clientY - swipeStartY;
   if (Math.abs(xDelta) < 110 || Math.abs(xDelta) < Math.abs(yDelta) * 1.3) return;
@@ -1935,6 +1711,8 @@ grid.addEventListener("pointerup", (event) => {
 });
 
 async function init() {
+  renderTimeSelectors();
+  setDefaultTaskTime();
   renderClock();
   await syncHostTime();
   state.weekStart = startOfWeek(hostNow());
@@ -1943,7 +1721,6 @@ async function init() {
   setInterval(syncHostTime, 5 * 60 * 1000);
   await loadAccounts();
   await loadGroups();
-  await loadTasks();
   if (state.currentUser && state.accounts.includes(state.currentUser)) {
     state.isViewer = isViewerAccount(state.currentUser);
     showPlanner();
@@ -2199,13 +1976,44 @@ async function apiPost(url, payload) {
 }
 
 function shiftWeek(amount) {
-  if (state.isViewer) {
-    state.weekStart = startOfWeek(hostNow());
-    render();
-    return;
-  }
+  markOverviewInteraction();
   state.weekStart = addDays(state.weekStart, amount * 7);
   render();
+}
+
+function markOverviewInteraction() {
+  if (!state.isViewer) return;
+  if (state.overviewResetTimer) {
+    clearTimeout(state.overviewResetTimer);
+  }
+  state.overviewResetTimer = setTimeout(() => {
+    if (!state.isViewer) return;
+    state.weekStart = startOfWeek(hostNow());
+    render();
+  }, 10 * 60 * 1000);
+}
+
+function renderTimeSelectors() {
+  if (!taskHour || !taskMinute) return;
+  taskHour.innerHTML = `<option value="">--</option>${Array.from({ length: 24 }, (_, hour) => {
+    const value = String(hour).padStart(2, "0");
+    return `<option value="${value}">${value}</option>`;
+  }).join("")}`;
+  taskMinute.innerHTML = Array.from({ length: 12 }, (_, index) => {
+    const value = String(index * 5).padStart(2, "0");
+    return `<option value="${value}">${value}</option>`;
+  }).join("");
+}
+
+function selectedTimeValue() {
+  if (!taskHour || !taskMinute || !taskHour.value) return "";
+  return `${taskHour.value}:${taskMinute.value || "00"}`;
+}
+
+function setDefaultTaskTime() {
+  if (!taskHour || !taskMinute) return;
+  taskHour.value = "";
+  taskMinute.value = "00";
 }
 
 function getWeekDays() {
@@ -2244,13 +2052,27 @@ function formatTaskTime(value) {
   return formatDate(date, { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-async function loadTasks() {
+function loadTasks() {
   try {
-    state.tasks = await fetch("/api/tasks").then((response) => response.json());
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || seedTasks();
   } catch {
-    state.tasks = [];
+    return seedTasks();
   }
-  renderWeekGrid();
+}
+
+function saveTasks() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+}
+
+function createId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function seedTasks() {
+  return [];
 }
 
 function escapeHtml(value) {
