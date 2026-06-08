@@ -350,6 +350,7 @@ h3 {
   min-height: 0;
   overflow: hidden;
   padding: 8px;
+  border-radius: 0;
   z-index: 1;
 }
 
@@ -387,6 +388,11 @@ h3 {
 
 .timeline-task .task-actions {
   margin-top: auto;
+}
+
+.timeline-event .chip,
+.timeline-task .chip {
+  border-radius: 0;
 }
 
 .task-card {
@@ -459,7 +465,7 @@ h3 {
 .delete-task {
   width: 38px;
   min-height: 34px;
-  border-radius: 8px;
+  border-radius: 0;
   background: #edf1ef;
   color: var(--muted);
   font-size: 1.35rem;
@@ -634,6 +640,40 @@ select {
   background: rgba(29, 35, 40, 0.34);
 }
 
+.note-dialog {
+  width: min(520px, calc(100vw - 28px));
+  max-height: min(620px, calc(100vh - 28px));
+  overflow: auto;
+  padding: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: var(--shadow);
+}
+
+.note-dialog[open] {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  z-index: 90;
+}
+
+.note-dialog::backdrop {
+  background: rgba(29, 35, 40, 0.34);
+}
+
+.note-dialog-body {
+  color: var(--ink);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.note-dialog-body a {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 .dialog-header {
   display: flex;
   align-items: center;
@@ -751,6 +791,7 @@ textarea {
 }
 
 .task-card.timeline-task {
+  border-radius: 0;
   min-height: 0;
   padding: 8px;
 }
@@ -777,31 +818,13 @@ textarea {
 .note-toggle {
   min-width: 38px;
   min-height: 34px;
-  border-radius: 8px;
+  border-radius: 0;
   background: #edf1ef;
   color: var(--ink);
   font-size: 1.1rem;
   font-weight: 900;
   line-height: 1;
 }
-
-.task-note-panel {
-  border-radius: 8px;
-  background: #eef3ef;
-  color: var(--ink);
-  padding: 10px;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  font-size: 0.95rem;
-  line-height: 1.35;
-}
-
-.task-note-panel a {
-  color: var(--accent-strong);
-  font-weight: 800;
-}
-
-
 
 .broadcast-panel {
   display: grid;
@@ -1084,6 +1107,7 @@ textarea {
 }
 
 .event-card.timeline-event {
+  border-radius: 0;
   min-height: 0;
   padding: 8px;
 }
@@ -1115,17 +1139,11 @@ textarea {
 .event-note-toggle {
   width: 38px;
   min-height: 34px;
-  border-radius: 8px;
+  border-radius: 0;
   background: #edf1ef;
   color: var(--muted);
   font-size: 1.35rem;
   line-height: 1;
-}
-
-.event-note-panel {
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
-  color: var(--ink);
 }
 
 .broadcast-seen {

@@ -69,6 +69,10 @@ const accountList = document.querySelector("#account-list");
 const groupForm = document.querySelector("#group-form");
 const groupName = document.querySelector("#group-name");
 const groupList = document.querySelector("#group-list");
+const noteDialog = document.querySelector("#note-dialog");
+const noteDialogTitle = document.querySelector("#note-dialog-title");
+const noteDialogBody = document.querySelector("#note-dialog-body");
+const noteDialogClose = document.querySelector("#note-dialog-close");
 
 [taskAssignees, eventAssignees, broadcastTargets].forEach((container) => {
   if (!container) return;
@@ -379,17 +383,9 @@ eventForm.addEventListener("submit", async (event) => {
 });
 
 grid.addEventListener("click", async (event) => {
-  const noteButton = event.target.closest("[data-note-toggle]");
+  const noteButton = event.target.closest("[data-note-kind]");
   if (noteButton) {
-    const panel = document.querySelector(`#${CSS.escape(noteButton.dataset.noteToggle)}`);
-    if (panel) panel.hidden = !panel.hidden;
-    return;
-  }
-
-  const eventNoteButton = event.target.closest("[data-event-note-toggle]");
-  if (eventNoteButton) {
-    const panel = document.querySelector(`#${CSS.escape(eventNoteButton.dataset.eventNoteToggle)}`);
-    if (panel) panel.hidden = !panel.hidden;
+    openNoteDialog(noteButton.dataset.noteKind, noteButton.dataset.noteId);
     return;
   }
 
@@ -421,6 +417,12 @@ grid.addEventListener("click", async (event) => {
   }
   state.tasks = normalizeTasks(response.tasks);
   render();
+});
+
+noteDialogClose.addEventListener("click", () => closeNoteDialog());
+
+noteDialog.addEventListener("click", (event) => {
+  if (event.target === noteDialog) closeNoteDialog();
 });
 
 let swipeStartX = 0;
@@ -956,7 +958,6 @@ function renderTask(task, index, dateKey = null) {
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = task.requester ? `by: ${task.requester}` : "by: unknown";
   const note = String(task.note || task.notes || "").trim();
-  const noteId = `task-note-${String(task.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const canDelete = canDeleteTask(task);
   const position = dateKey && task.time ? taskTimelinePosition(task) : null;
   const timelineStyle = position
@@ -966,15 +967,14 @@ function renderTask(task, index, dateKey = null) {
     <article class="task-card ${dateKey ? "timeline-task" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
-        ${task.time ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
+        ${task.time && !dateKey ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
         <span class="chip">${escapeHtml(assignee)}</span>
         <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="task-actions">
-        <button class="note-toggle" type="button" data-note-toggle="${escapeHtml(noteId)}" aria-label="Show note for ${escapeHtml(task.title)}">&#8942;</button>
+        ${note ? `<button class="note-toggle" type="button" data-note-kind="task" data-note-id="${escapeHtml(task.id)}" aria-label="Show note for ${escapeHtml(task.title)}">&#8942;</button>` : ""}
         ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
-      <div id="${escapeHtml(noteId)}" class="task-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
     </article>
   `;
 }
@@ -988,12 +988,35 @@ function taskTimelinePosition(task) {
   };
 }
 
+function openNoteDialog(kind, id) {
+  const item = kind === "event"
+    ? state.events.find((event) => event.id === id)
+    : state.tasks.find((task) => task.id === id);
+  if (!item) return;
+  const note = String(item.note || item.notes || "").trim();
+  if (!note) return;
+  noteDialogTitle.textContent = item.title || "Note";
+  noteDialogBody.innerHTML = linkifyNote(note);
+  if (typeof noteDialog.showModal === "function") {
+    noteDialog.showModal();
+  } else {
+    noteDialog.setAttribute("open", "");
+  }
+}
+
+function closeNoteDialog() {
+  if (typeof noteDialog.close === "function") {
+    noteDialog.close();
+  } else {
+    noteDialog.removeAttribute("open");
+  }
+}
+
 function renderEvent(event, index, dateKey = null) {
   const assignees = normalizeAssignees(event);
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = event.requester ? `by: ${event.requester}` : "by: unknown";
   const note = String(event.note || event.notes || "").trim();
-  const noteId = `event-note-${String(event.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const canDelete = canDeleteEvent(event);
   const position = dateKey ? eventTimelinePosition(event, dateKey) : null;
   const timelineStyle = position
@@ -1003,15 +1026,14 @@ function renderEvent(event, index, dateKey = null) {
     <article class="event-card ${dateKey ? "timeline-event" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
-        <span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>
+        ${!dateKey ? `<span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>` : ""}
         <span class="chip">${escapeHtml(assignee)}</span>
         <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="event-actions">
-        <button class="event-note-toggle" type="button" data-event-note-toggle="${escapeHtml(noteId)}" aria-label="Show note for ${escapeHtml(event.title)}">&#8942;</button>
+        ${note ? `<button class="event-note-toggle" type="button" data-note-kind="event" data-note-id="${escapeHtml(event.id)}" aria-label="Show note for ${escapeHtml(event.title)}">&#8942;</button>` : ""}
         ${canDelete ? `<button class="delete-event" type="button" data-event-delete="${escapeHtml(event.id)}" aria-label="Remove ${escapeHtml(event.title)}">&times;</button>` : ""}
       </div>
-      <div id="${escapeHtml(noteId)}" class="event-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
     </article>
   `;
 }
