@@ -896,22 +896,39 @@ function renderWeekGrid() {
       .filter((event) => eventOverlapsDay(event, key))
       .filter(eventMatchesCurrentFilter)
       .sort(sortEvents);
-    const itemsHtml = [
-      ...events.map(renderEvent),
-      ...tasks.map(renderTask),
-    ].join("");
+    const tasksHtml = tasks.map(renderTask).join("");
     return `
       <article class="day-column">
         <header class="day-header">
           <strong>${formatDate(day, { weekday: "short" })}</strong>
           <span class="date-label">${formatDate(day, { month: "short", day: "numeric" })}</span>
         </header>
-        <div class="task-list">
-          ${itemsHtml || `<div class="empty-day">Open</div>`}
+        ${renderDayTimeline(events, key)}
+        <div class="task-list ${tasks.length ? "" : "is-empty"}">
+          ${tasksHtml || `<div class="empty-day">No tasks</div>`}
         </div>
       </article>
     `;
   }).join("");
+}
+
+function renderDayTimeline(events, dateKey) {
+  const hourRows = Array.from({ length: 25 }, (_, hour) => `
+    <div class="timeline-hour" style="--hour:${hour}">
+      <span>${String(hour).padStart(2, "0")}:00</span>
+    </div>
+  `).join("");
+  return `
+    <section class="day-timeline" aria-label="Events from 00:00 to 24:00">
+      <div class="timeline-gutter">${hourRows}</div>
+      <div class="timeline-lane">
+        ${hourRows}
+        <div class="timeline-events">
+          ${events.map((event, index) => renderEvent(event, index, dateKey)).join("")}
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function renderTask(task, index) {
@@ -938,15 +955,19 @@ function renderTask(task, index) {
   `;
 }
 
-function renderEvent(event, index) {
+function renderEvent(event, index, dateKey = null) {
   const assignees = normalizeAssignees(event);
   const assignee = assignees.length ? assignees.join(", ") : "Anyone";
   const requester = event.requester ? `by: ${event.requester}` : "by: unknown";
   const note = String(event.note || event.notes || "").trim();
   const noteId = `event-note-${String(event.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const canDelete = canDeleteEvent(event);
+  const position = dateKey ? eventTimelinePosition(event, dateKey) : null;
+  const timelineStyle = position
+    ? ` style="--event-top:${position.top}; --event-height:${position.height};"`
+    : "";
   return `
-    <article class="event-card ${note ? "has-note" : ""}" data-tone="${index % 4}">
+    <article class="event-card ${dateKey ? "timeline-event" : ""} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
         <span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>
@@ -960,6 +981,26 @@ function renderEvent(event, index) {
       <div id="${escapeHtml(noteId)}" class="event-note-panel" hidden>${note ? linkifyNote(note) : ""}</div>
     </article>
   `;
+}
+
+function eventTimelinePosition(event, dateKey) {
+  const startDate = String(event.startDate || "");
+  const endDate = String(event.endDate || startDate);
+  const startMinute = sameName(dateKey, startDate) ? timeToMinutes(event.startTime) : 0;
+  const endMinute = sameName(dateKey, endDate) ? timeToMinutes(event.endTime) : 24 * 60;
+  const top = Math.max(0, Math.min(startMinute, 24 * 60));
+  const bottom = Math.max(top, Math.min(endMinute, 24 * 60));
+  const duration = Math.max(15, bottom - top);
+  return {
+    top: (top / (24 * 60)) * 100,
+    height: (duration / (24 * 60)) * 100,
+  };
+}
+
+function timeToMinutes(value) {
+  const [hour, minute] = String(value || "00:00").split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return hour * 60 + minute;
 }
 
 function normalizeEvents(events) {

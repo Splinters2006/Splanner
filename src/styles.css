@@ -283,6 +283,72 @@ h3 {
   padding: 12px;
 }
 
+.day-timeline {
+  --hour-height: 42px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 8px;
+  min-height: calc(var(--hour-height) * 24);
+  padding: 10px 8px 0;
+}
+
+.timeline-gutter,
+.timeline-lane {
+  position: relative;
+  min-height: calc(var(--hour-height) * 24);
+}
+
+.timeline-hour {
+  position: absolute;
+  top: calc(var(--hour) * var(--hour-height));
+  left: 0;
+  right: 0;
+}
+
+.timeline-gutter .timeline-hour span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  line-height: 1;
+  text-align: right;
+  transform: translateY(-50%);
+}
+
+.timeline-lane .timeline-hour {
+  border-top: 1px solid rgba(100, 112, 122, 0.22);
+}
+
+.timeline-events {
+  position: absolute;
+  inset: 0 0 0 0;
+}
+
+.timeline-event {
+  position: absolute;
+  top: calc(var(--event-top) * 1%);
+  left: 0;
+  right: 0;
+  height: max(40px, calc(var(--event-height) * 1%));
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px;
+  z-index: 1;
+}
+
+.timeline-event .event-title {
+  font-size: 0.95rem;
+}
+
+.timeline-event .event-meta {
+  gap: 5px;
+  font-size: 0.82rem;
+}
+
+.timeline-event .event-actions {
+  margin-top: auto;
+}
+
 .task-card {
   border-left: 6px solid var(--accent);
   border-radius: 8px;
@@ -972,6 +1038,11 @@ textarea {
   min-height: 92px;
   display: grid;
   gap: 9px;
+}
+
+.event-card.timeline-event {
+  min-height: 0;
+  padding: 8px;
 }
 
 .event-title {
