@@ -882,7 +882,7 @@ function renderDefaultDates() {
 }
 
 function renderWeekGrid() {
-  grid.innerHTML = getWeekDays().map((day) => {
+  const daysHtml = getWeekDays().map((day) => {
     const key = toDateKey(day);
     const tasks = state.tasks
       .filter((task) => task.date === key)
@@ -906,17 +906,24 @@ function renderWeekGrid() {
       </article>
     `;
   }).join("");
+  grid.innerHTML = `${renderWeekTimeAxis()}${daysHtml}`;
+}
+
+function renderWeekTimeAxis() {
+  return `
+    <aside class="week-time-axis" aria-label="Timeline hours">
+      <div class="timeline-axis-spacer"></div>
+      <div class="timeline-gutter">
+        ${renderTimelineHours(true)}
+      </div>
+    </aside>
+  `;
 }
 
 function renderDayTimeline(events, dateKey) {
-  const hourRows = Array.from({ length: 25 }, (_, hour) => `
-    <div class="timeline-hour" style="--hour:${hour}">
-      <span>${String(hour).padStart(2, "0")}:00</span>
-    </div>
-  `).join("");
+  const hourRows = renderTimelineHours(false);
   return `
     <section class="day-timeline" aria-label="Events from 00:00 to 24:00">
-      <div class="timeline-gutter">${hourRows}</div>
       <div class="timeline-lane">
         ${hourRows}
         <div class="timeline-events">
@@ -925,6 +932,14 @@ function renderDayTimeline(events, dateKey) {
       </div>
     </section>
   `;
+}
+
+function renderTimelineHours(showLabels) {
+  return Array.from({ length: 25 }, (_, hour) => `
+    <div class="timeline-hour" style="--hour:${hour}">
+      ${showLabels ? `<span>${String(hour).padStart(2, "0")}:00</span>` : ""}
+    </div>
+  `).join("");
 }
 
 function renderTask(task, index) {

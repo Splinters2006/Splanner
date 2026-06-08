@@ -245,9 +245,17 @@ h3 {
 .week-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(7, minmax(140px, 1fr));
+  grid-template-columns: 54px repeat(7, minmax(140px, 1fr));
   gap: 10px;
   touch-action: pan-y;
+}
+
+.week-time-axis {
+  --hour-height: 42px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 56vh;
+  padding-top: 1px;
 }
 
 .day-column {
@@ -262,6 +270,7 @@ h3 {
 }
 
 .day-header {
+  min-height: 80px;
   padding: 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -285,11 +294,12 @@ h3 {
 
 .day-timeline {
   --hour-height: 42px;
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  gap: 8px;
   min-height: calc(var(--hour-height) * 24);
   padding: 10px 8px 0;
+}
+
+.timeline-axis-spacer {
+  min-height: 80px;
 }
 
 .timeline-gutter,
@@ -880,9 +890,7 @@ textarea {
   }
 
   .week-grid {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(78vw, 1fr);
-    grid-template-columns: none;
+    grid-template-columns: 54px repeat(7, minmax(78vw, 1fr));
     overflow-x: auto;
     scroll-snap-type: x mandatory;
     padding-bottom: 8px;
