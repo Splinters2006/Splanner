@@ -1152,8 +1152,27 @@ textarea {
 .create-form .person-field,
 .create-form .note-field,
 .create-form .wide-field,
+.create-form .hidden-task-field,
 .create-form button {
   grid-column: 1 / -1;
+}
+
+.hidden-task-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+  font-weight: 750;
+}
+
+.hidden-task-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 .create-form textarea {

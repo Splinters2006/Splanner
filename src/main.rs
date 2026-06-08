@@ -38,6 +38,7 @@ struct Task {
     requester: String,
     created_at: String,
     note: String,
+    hidden: bool,
 }
 
 #[derive(Clone)]
@@ -468,6 +469,7 @@ fn handle_add_task(body: &str) -> (&'static str, &'static str, String) {
     let time = json_field(body, "time").unwrap_or_default();
     let created_at = sanitize_task_text(&json_field(body, "createdAt").unwrap_or_default(), 40);
     let note = sanitize_note_text(&json_field(body, "note").unwrap_or_default(), 2000);
+    let hidden = is_truthy(&json_field(body, "hidden").unwrap_or_default());
     let assignees = parse_assignees_field(&json_field(body, "assignees").unwrap_or_default());
 
     if title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time) {
@@ -484,6 +486,7 @@ fn handle_add_task(body: &str) -> (&'static str, &'static str, String) {
         requester,
         created_at,
         note,
+        hidden,
     });
 
     if let Err(error) = write_tasks(&tasks) {
@@ -979,7 +982,7 @@ fn write_tasks(tasks: &[Task]) -> std::io::Result<()> {
         .iter()
         .map(|task| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 task.id,
                 task.title,
                 task.date,
@@ -987,7 +990,8 @@ fn write_tasks(tasks: &[Task]) -> std::io::Result<()> {
                 task.assignees.join(","),
                 task.requester,
                 task.created_at,
-                task.note
+                task.note,
+                if task.hidden { "true" } else { "false" }
             )
         })
         .collect::<Vec<_>>()
@@ -1004,7 +1008,7 @@ fn write_tasks(tasks: &[Task]) -> std::io::Result<()> {
 
 fn parse_task_line(line: &str) -> Option<Task> {
     let parts = line.split('\t').collect::<Vec<_>>();
-    if parts.len() != 7 && parts.len() != 8 {
+    if parts.len() != 7 && parts.len() != 8 && parts.len() != 9 {
         return None;
     }
     let id = sanitize_task_text(parts[0], 100);
@@ -1018,6 +1022,7 @@ fn parse_task_line(line: &str) -> Option<Task> {
         .get(7)
         .map(|value| sanitize_note_text(value, 2000))
         .unwrap_or_default();
+    let hidden = parts.get(8).map(|value| is_truthy(value)).unwrap_or(false);
 
     if id.is_empty() || title.is_empty() || !is_valid_date_key(&date) || !is_valid_time_value(&time)
     {
@@ -1032,6 +1037,7 @@ fn parse_task_line(line: &str) -> Option<Task> {
             requester,
             created_at,
             note,
+            hidden,
         })
     }
 }
@@ -1043,7 +1049,7 @@ fn tasks_json(tasks: &[Task]) -> String {
             .iter()
             .map(|task| {
                 format!(
-                    r#"{{"id":"{}","title":"{}","date":"{}","time":"{}","assignees":{},"requester":"{}","createdAt":"{}","note":"{}"}}"#,
+                    r#"{{"id":"{}","title":"{}","date":"{}","time":"{}","assignees":{},"requester":"{}","createdAt":"{}","note":"{}","hidden":{}}}"#,
                     escape_json(&task.id),
                     escape_json(&task.title),
                     escape_json(&task.date),
@@ -1051,7 +1057,8 @@ fn tasks_json(tasks: &[Task]) -> String {
                     string_array_json(&task.assignees),
                     escape_json(&task.requester),
                     escape_json(&task.created_at),
-                    escape_json(&task.note)
+                    escape_json(&task.note),
+                    if task.hidden { "true" } else { "false" }
                 )
             })
             .collect::<Vec<_>>()
@@ -1452,6 +1459,13 @@ fn sanitize_account_name(name: &str) -> String {
 
 fn same_name(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
 }
 
 fn accounts_json(accounts: &[Account]) -> String {

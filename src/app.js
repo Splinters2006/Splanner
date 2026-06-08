@@ -35,6 +35,7 @@ const taskDay = document.querySelector("#task-day");
 const taskHour = document.querySelector("#task-hour");
 const taskMinute = document.querySelector("#task-minute");
 const taskNote = document.querySelector("#task-note");
+const taskHidden = document.querySelector("#task-hidden");
 const eventForm = document.querySelector("#event-form");
 const eventTitle = document.querySelector("#event-title");
 const eventStartDay = document.querySelector("#event-start-day");
@@ -335,6 +336,7 @@ form.addEventListener("submit", async (event) => {
     requester: state.currentUser,
     createdAt: new Date().toISOString(),
     note: String(data.get("note") || "").trim(),
+    hidden: taskHidden && taskHidden.checked ? "true" : "false",
   });
   if (!response.ok) {
     alert(response.error || "Could not add task");
@@ -865,6 +867,7 @@ function renderWeekGrid() {
     const key = toDateKey(day);
     const tasks = state.tasks
       .filter((task) => task.date === key)
+      .filter(taskVisibleToCurrentUser)
       .filter(taskMatchesCurrentFilter)
       .sort(sortTasks);
     const timedTasks = tasks.filter((task) => task.time);
@@ -1235,6 +1238,12 @@ function taskMatchesCurrentFilter(task) {
   return true;
 }
 
+function taskVisibleToCurrentUser(task) {
+  if (!task.hidden) return true;
+  if (state.isViewer || !state.currentUser) return false;
+  return sameName(task.requester, state.currentUser) && taskAppliesToPerson(task, state.currentUser);
+}
+
 function taskAppliesToPerson(task, person) {
   const assignees = normalizeAssignees(task);
   if (!assignees.length) return true;
@@ -1366,6 +1375,7 @@ function setDefaultTaskTime() {
   if (taskHour) taskHour.value = "";
   if (taskMinute) taskMinute.value = "00";
   if (taskNote) taskNote.value = "";
+  if (taskHidden) taskHidden.checked = false;
 }
 
 function setDefaultEventTime() {
@@ -1425,6 +1435,7 @@ function normalizeTasks(tasks) {
     ...task,
     assignees: normalizeAssignees(task),
     note: task.note || task.notes || "",
+    hidden: task.hidden === true || task.hidden === "true",
   })) : [];
 }
 
