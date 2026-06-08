@@ -1125,7 +1125,7 @@ function markOverviewInteraction() {
 }
 
 function renderTimeSelectors() {
-  [taskMinute, eventStartMinute, eventEndMinute].forEach((select) => {
+  [eventStartMinute, eventEndMinute].forEach((select) => {
     if (!select) return;
     select.innerHTML = Array.from({ length: 12 }, (_, index) => {
       const value = String(index * 5).padStart(2, "0");
@@ -1153,7 +1153,21 @@ function selectedTimeValue(hourInput, minuteSelect, label) {
     hourInput.focus();
     return null;
   }
-  return `${String(hour).padStart(2, "0")}:${minuteSelect.value || "00"}`;
+
+  const rawMinute = String(minuteSelect.value || "00").trim();
+  if (!/^\d{1,2}$/.test(rawMinute)) {
+    alert(`Use a ${label} minute between 0 and 59.`);
+    minuteSelect.focus();
+    return null;
+  }
+  const minute = Number(rawMinute);
+  if (minute < 0 || minute > 59) {
+    alert(`Use a ${label} minute between 0 and 59.`);
+    minuteSelect.focus();
+    return null;
+  }
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function setDefaultTaskTime() {
