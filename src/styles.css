@@ -667,7 +667,7 @@ select {
 .note-dialog {
   width: min(520px, calc(100vw - 28px));
   max-height: min(620px, calc(100vh - 28px));
-  overflow: auto;
+  overflow: hidden;
   padding: 18px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -680,6 +680,8 @@ select {
   inset: 50% auto auto 50%;
   transform: translate(-50%, -50%);
   z-index: 90;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .note-dialog::backdrop {
@@ -689,7 +691,10 @@ select {
 .note-dialog-body {
   color: var(--ink);
   line-height: 1.45;
+  min-height: 0;
+  overflow: auto;
   overflow-wrap: anywhere;
+  padding-right: 4px;
   white-space: pre-wrap;
 }
 
