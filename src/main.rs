@@ -1400,7 +1400,6 @@ const hostTime = document.querySelector("#host-time");
 const hostDate = document.querySelector("#host-date");
 const taskDay = document.querySelector("#task-day");
 const taskAssignees = document.querySelector("#task-assignees");
-const currentUserLabel = document.querySelector("#current-user-label");
 const form = document.querySelector("#task-form");
 const memberRail = document.querySelector("#member-rail");
 const adminDialog = document.querySelector("#admin-dialog");
