@@ -318,10 +318,11 @@ form.addEventListener("submit", async (event) => {
   if (!title) return;
   const time = selectedTimeValue(taskHour, taskMinute, "by");
   if (time === null) return;
+  const date = String(data.get("day") || "").trim();
 
   const response = await apiPost("/api/tasks", {
     title,
-    date: data.get("day"),
+    date,
     time,
     assignees: getSelectedAssignees().join(","),
     requester: state.currentUser,
@@ -350,12 +351,14 @@ eventForm.addEventListener("submit", async (event) => {
   const startTime = selectedTimeValue(eventStartHour, eventStartMinute, "start");
   const endTime = selectedTimeValue(eventEndHour, eventEndMinute, "end");
   if (startTime === null || endTime === null || !startTime || !endTime) return;
+  const startDate = String(data.get("startDay") || "").trim();
+  const endDate = String(data.get("endDay") || "").trim();
 
   const response = await apiPost("/api/events", {
     title,
-    startDate: data.get("startDay"),
+    startDate,
     startTime,
-    endDate: data.get("endDay"),
+    endDate,
     endTime,
     assignees: getSelectedEventAssignees().join(","),
     requester: state.currentUser,
@@ -368,6 +371,8 @@ eventForm.addEventListener("submit", async (event) => {
   }
   state.events = normalizeEvents(response.events);
   eventForm.reset();
+  eventStartDay.value = toDateKey(hostNow());
+  eventEndDay.value = toDateKey(hostNow());
   setDefaultEventTime();
   closeCreateDialog();
   render();
@@ -582,7 +587,7 @@ async function loadAccounts(accounts = null) {
 function render() {
   renderMembers();
   renderWeekHeading();
-  renderDayOptions();
+  renderDefaultDates();
   renderPersonOptions();
   renderBroadcastTargets();
   renderTaskFilter();
@@ -869,20 +874,11 @@ function renderWeekHeading() {
   weekRange.textContent = `${formatDate(days[0], { month: "long", day: "numeric" })} - ${formatDate(days[6], { month: "long", day: "numeric", year: "numeric" })}`;
 }
 
-function renderDayOptions() {
-  const options = getWeekDays().map((day) => `
-    <option value="${toDateKey(day)}">${formatDate(day, { weekday: "long", month: "short", day: "numeric" })}</option>
-  `).join("");
-  const currentTask = taskDay.value || toDateKey(hostNow());
-  taskDay.innerHTML = options;
-  taskDay.value = getWeekDays().some((day) => toDateKey(day) === currentTask) ? currentTask : toDateKey(getWeekDays()[0]);
-
-  [eventStartDay, eventEndDay].forEach((select) => {
-    if (!select) return;
-    const current = select.value || toDateKey(hostNow());
-    select.innerHTML = options;
-    select.value = getWeekDays().some((day) => toDateKey(day) === current) ? current : toDateKey(getWeekDays()[0]);
-  });
+function renderDefaultDates() {
+  const today = toDateKey(hostNow());
+  if (taskDay && !taskDay.value) taskDay.value = today;
+  if (eventStartDay && !eventStartDay.value) eventStartDay.value = today;
+  if (eventEndDay && !eventEndDay.value) eventEndDay.value = today;
 }
 
 function renderWeekGrid() {
