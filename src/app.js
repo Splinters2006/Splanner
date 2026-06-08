@@ -383,12 +383,6 @@ eventForm.addEventListener("submit", async (event) => {
 });
 
 grid.addEventListener("click", async (event) => {
-  const noteButton = event.target.closest("[data-note-kind]");
-  if (noteButton) {
-    openNoteDialog(noteButton.dataset.noteKind, noteButton.dataset.noteId);
-    return;
-  }
-
   const eventDeleteButton = event.target.closest("[data-event-delete]");
   if (eventDeleteButton) {
     const response = await apiPost("/api/events/delete", {
@@ -406,17 +400,24 @@ grid.addEventListener("click", async (event) => {
   }
 
   const button = event.target.closest("[data-delete]");
-  if (!button) return;
-  const response = await apiPost("/api/tasks/delete", {
-    id: button.dataset.delete,
-    requester: state.currentUser,
-  });
-  if (!response.ok) {
-    alert(response.error || "You cannot delete this task");
+  if (button) {
+    const response = await apiPost("/api/tasks/delete", {
+      id: button.dataset.delete,
+      requester: state.currentUser,
+    });
+    if (!response.ok) {
+      alert(response.error || "You cannot delete this task");
+      return;
+    }
+    state.tasks = normalizeTasks(response.tasks);
+    render();
     return;
   }
-  state.tasks = normalizeTasks(response.tasks);
-  render();
+
+  const detailCard = event.target.closest("[data-detail-kind]");
+  if (detailCard) {
+    openNoteDialog(detailCard.dataset.detailKind, detailCard.dataset.detailId);
+  }
 });
 
 noteDialogClose.addEventListener("click", () => closeNoteDialog());
@@ -962,13 +963,12 @@ function renderTask(task, index, dateKey = null) {
     : "";
   const involvementClass = currentUserInvolvementClass(task);
   return `
-    <article class="task-card ${dateKey ? "timeline-task" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
+    <article class="task-card ${dateKey ? "timeline-task" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}" data-detail-kind="task" data-detail-id="${escapeHtml(task.id)}"${timelineStyle}>
       <p class="task-title">${escapeHtml(task.title)}</p>
       <div class="task-meta">
         ${task.time && !dateKey ? `<span class="chip time-chip">${formatTaskTime(task.time)}</span>` : ""}
       </div>
       <div class="task-actions">
-        <button class="note-toggle" type="button" data-note-kind="task" data-note-id="${escapeHtml(task.id)}" aria-label="Show details for ${escapeHtml(task.title)}">&#8942;</button>
         ${canDelete ? `<button class="delete-task" type="button" data-delete="${escapeHtml(task.id)}" aria-label="Remove ${escapeHtml(task.title)}">&times;</button>` : ""}
       </div>
     </article>
@@ -1041,7 +1041,7 @@ function renderEvent(event, index, dateKey = null) {
     : "";
   const involvementClass = currentUserInvolvementClass(event);
   return `
-    <article class="event-card ${dateKey ? "timeline-event" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}"${timelineStyle}>
+    <article class="event-card ${dateKey ? "timeline-event" : ""} ${involvementClass} ${note ? "has-note" : ""}" data-tone="${index % 4}" data-detail-kind="event" data-detail-id="${escapeHtml(event.id)}"${timelineStyle}>
       <p class="event-title">${escapeHtml(event.title)}</p>
       <div class="event-meta">
         ${!dateKey ? `<span class="chip time-chip event-time-chip">${escapeHtml(formatEventTime(event))}</span>` : ""}
@@ -1049,7 +1049,6 @@ function renderEvent(event, index, dateKey = null) {
         <span class="chip">${escapeHtml(requester)}</span>
       </div>
       <div class="event-actions">
-        ${note ? `<button class="event-note-toggle" type="button" data-note-kind="event" data-note-id="${escapeHtml(event.id)}" aria-label="Show note for ${escapeHtml(event.title)}">&#8942;</button>` : ""}
         ${canDelete ? `<button class="delete-event" type="button" data-event-delete="${escapeHtml(event.id)}" aria-label="Remove ${escapeHtml(event.title)}">&times;</button>` : ""}
       </div>
     </article>

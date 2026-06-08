@@ -364,6 +364,10 @@ h3 {
   z-index: 1;
 }
 
+[data-detail-kind] {
+  cursor: pointer;
+}
+
 .timeline-event,
 .timeline-task,
 .task-card.timeline-task,
@@ -879,17 +883,6 @@ textarea {
   gap: 8px;
 }
 
-.note-toggle {
-  min-width: 38px;
-  min-height: 34px;
-  border-radius: 0;
-  background: #edf1ef;
-  color: var(--ink);
-  font-size: 1.1rem;
-  font-weight: 900;
-  line-height: 1;
-}
-
 .broadcast-panel {
   display: grid;
   gap: 10px;
@@ -1202,8 +1195,7 @@ textarea {
 }
 
 .delete-event,
-.note-toggle,
-.event-note-toggle {
+.delete-task {
   width: 38px;
   min-height: 34px;
   border-radius: 0;
