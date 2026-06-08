@@ -1,0 +1,10 @@
+target/
+
+# Rust build artifacts
+*.rlib
+*.profraw
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
