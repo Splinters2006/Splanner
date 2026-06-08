@@ -428,7 +428,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <form id="admin-login" class="admin-form" autocomplete="off">
       <header class="dialog-header">
         <h2>Admin</h2>
-        <button class="plain-button" value="cancel" formmethod="dialog" type="submit" aria-label="Close admin">Close</button>
+        <button id="admin-close" class="plain-button" value="cancel" formmethod="dialog" type="button" aria-label="Close admin">Close</button>
       </header>
       <label>
         <span>Password</span>
@@ -809,6 +809,13 @@ select {
   padding: 18px;
 }
 
+.admin-dialog[open] {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+}
+
 .admin-dialog::backdrop {
   background: rgba(29, 35, 40, 0.34);
 }
@@ -996,8 +1003,20 @@ document.querySelector("#today").addEventListener("click", () => {
 
 document.querySelector("#admin-open").addEventListener("click", () => {
   adminMessage.textContent = "";
-  adminDialog.showModal();
+  if (typeof adminDialog.showModal === "function") {
+    adminDialog.showModal();
+  } else {
+    adminDialog.setAttribute("open", "");
+  }
   if (!state.adminPassword) adminPassword.focus();
+});
+
+document.querySelector("#admin-close").addEventListener("click", () => {
+  if (typeof adminDialog.close === "function") {
+    adminDialog.close();
+  } else {
+    adminDialog.removeAttribute("open");
+  }
 });
 
 document.querySelector("#admin-logout").addEventListener("click", () => {
@@ -1054,7 +1073,7 @@ form.addEventListener("submit", (event) => {
   if (!title) return;
 
   state.tasks.push({
-    id: crypto.randomUUID(),
+    id: createId(),
     title,
     date: data.get("day"),
     assignee: data.get("assignee"),
@@ -1092,6 +1111,7 @@ grid.addEventListener("pointerup", (event) => {
 });
 
 async function init() {
+  renderClock();
   await syncHostTime();
   state.weekStart = startOfWeek(hostNow());
   renderClock();
@@ -1281,11 +1301,18 @@ function saveTasks() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
 }
 
+function createId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function seedTasks() {
   const days = Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(new Date()), index));
   return [
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       title: "Set dinner table",
       date: toDateKey(days[0]),
       assignee: "Sam",
@@ -1293,7 +1320,7 @@ function seedTasks() {
       createdAt: new Date().toISOString(),
     },
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       title: "Bring sports bag",
       date: toDateKey(days[2]),
       assignee: "Maya",

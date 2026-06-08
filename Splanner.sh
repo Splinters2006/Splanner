@@ -158,7 +158,7 @@ restart_systemd_service() {
     return
   fi
 
-  if systemctl list-unit-files "$SERVICE_NAME" >/dev/null 2>&1; then
+  if systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
     echo "Restarting systemd service..."
     sudo systemctl restart "$SERVICE_NAME"
   else
