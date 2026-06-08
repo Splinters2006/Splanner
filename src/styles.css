@@ -756,9 +756,16 @@ select {
 
 .note-dialog-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+.note-dialog-status {
+  margin-right: auto;
+  color: var(--accent-strong);
+  font-weight: 850;
 }
 
 .danger-button {

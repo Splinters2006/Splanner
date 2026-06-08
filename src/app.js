@@ -1013,7 +1013,7 @@ async function saveOpenDetailNote() {
   } else {
     state.tasks = normalizeTasks(response.tasks);
   }
-  openNoteDialog(kind, id);
+  closeNoteDialog();
   render();
 }
 
