@@ -409,6 +409,25 @@ legend {
   padding: 7px;
 }
 
+.option-section {
+  display: grid;
+  gap: 7px;
+  min-width: min(220px, 100%);
+}
+
+.option-heading {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.option-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .person-option {
   display: inline-flex;
   align-items: center;
@@ -417,6 +436,38 @@ legend {
   border-radius: 999px;
   background: #e8eeee;
   padding: 0 10px;
+}
+
+.option-kind {
+  border-radius: 999px;
+  background: rgba(29, 35, 40, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 900;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.option-name {
+  font-weight: 850;
+}
+
+.group-option {
+  background: #e7f0fa;
+  color: #254f7c;
+  font-style: italic;
+  font-weight: 850;
+}
+
+.group-option .option-kind {
+  background: rgba(75, 127, 184, 0.18);
+  color: #254f7c;
+}
+
+.target-groups {
+  border-left: 3px solid var(--blue);
+  padding-left: 10px;
 }
 
 .person-option input {
@@ -967,4 +1018,3 @@ textarea {
     grid-template-columns: 1fr 1fr;
   }
 }
-

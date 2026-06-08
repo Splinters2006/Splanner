@@ -675,21 +675,7 @@ function renderGroupControls() {
 }
 
 function renderPersonOptions() {
-  const personOptions = taskAccounts().map((name) => `
-      <label class="person-option">
-        <input type="checkbox" value="${escapeHtml(name)}">
-        <span>${escapeHtml(name)}</span>
-      </label>
-    `).join("");
-  const groupOptions = state.groups.map((group) => `
-      <label class="person-option">
-        <input type="checkbox" value="@${escapeHtml(group.name)}">
-        <span>${escapeHtml(group.name)}</span>
-      </label>
-    `).join("");
-  const optionsHtml = personOptions || groupOptions
-    ? `${personOptions}${groupOptions}`
-    : `<span class="chip">No accounts or groups yet</span>`;
+  const optionsHtml = renderSelectableTargets();
   taskAssignees.innerHTML = optionsHtml;
   updateGroupSelectionDisabling(taskAssignees);
   if (eventAssignees) {
@@ -700,22 +686,45 @@ function renderPersonOptions() {
 
 function renderBroadcastTargets() {
   if (!broadcastTargets) return;
-  const personOptions = taskAccounts().map((name) => `
-      <label class="person-option">
+  broadcastTargets.innerHTML = renderSelectableTargets();
+  updateGroupSelectionDisabling(broadcastTargets);
+}
+
+function renderSelectableTargets() {
+  const people = taskAccounts();
+  const personOptions = people.map((name) => `
+      <label class="person-option user-option">
         <input type="checkbox" value="${escapeHtml(name)}">
-        <span>${escapeHtml(name)}</span>
+        <span class="option-kind">Person</span>
+        <span class="option-name">${escapeHtml(name)}</span>
       </label>
     `).join("");
   const groupOptions = state.groups.map((group) => `
-      <label class="person-option">
+      <label class="person-option group-option">
         <input type="checkbox" value="@${escapeHtml(group.name)}">
-        <span>${escapeHtml(group.name)}</span>
+        <span class="option-kind">Group</span>
+        <span class="option-name">${escapeHtml(group.name)}</span>
       </label>
     `).join("");
-  broadcastTargets.innerHTML = personOptions || groupOptions
-    ? `${personOptions}${groupOptions}`
-    : `<span class="chip">No accounts or groups yet</span>`;
-  updateGroupSelectionDisabling(broadcastTargets);
+
+  if (!people.length && !state.groups.length) {
+    return `<span class="chip">No accounts or groups yet</span>`;
+  }
+
+  return `
+    ${people.length ? `
+      <section class="option-section target-users" aria-label="People">
+        <span class="option-heading">People</span>
+        <div class="option-items">${personOptions}</div>
+      </section>
+    ` : ""}
+    ${state.groups.length ? `
+      <section class="option-section target-groups" aria-label="Groups">
+        <span class="option-heading">Groups</span>
+        <div class="option-items">${groupOptions}</div>
+      </section>
+    ` : ""}
+  `;
 }
 
 function getSelectedBroadcastTargets() {
@@ -723,16 +732,29 @@ function getSelectedBroadcastTargets() {
 }
 
 function renderTaskFilter() {
-  const options = [{ value: "all", label: "Everyone" }];
-  taskAccounts().forEach((name) => options.push({ value: `person:${name}`, label: name }));
-  state.groups.forEach((group) => options.push({ value: `group:${group.name}`, label: group.name }));
+  const people = taskAccounts();
+  const options = [
+    { value: "all", label: "Everyone" },
+    ...people.map((name) => ({ value: `person:${name}`, label: name })),
+    ...state.groups.map((group) => ({ value: `group:${group.name}`, label: group.name })),
+  ];
 
   if (!options.some((option) => option.value === state.taskFilter)) {
     state.taskFilter = "all";
   }
-  taskFilter.innerHTML = options.map((option) => `
-    <option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>
-  `).join("");
+  taskFilter.innerHTML = `
+    <option value="all">Everyone</option>
+    ${people.length ? `
+      <optgroup label="People">
+        ${people.map((name) => `<option value="person:${escapeHtml(name)}">Person: ${escapeHtml(name)}</option>`).join("")}
+      </optgroup>
+    ` : ""}
+    ${state.groups.length ? `
+      <optgroup label="Groups">
+        ${state.groups.map((group) => `<option value="group:${escapeHtml(group.name)}">Group: ${escapeHtml(group.name)}</option>`).join("")}
+      </optgroup>
+    ` : ""}
+  `;
   taskFilter.value = state.taskFilter;
 }
 
