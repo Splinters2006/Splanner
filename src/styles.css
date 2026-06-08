@@ -359,7 +359,7 @@ h3 {
   right: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 8px;
+  padding: 6px;
   border-radius: 4px;
   z-index: 1;
 }
@@ -391,7 +391,8 @@ h3 {
 }
 
 .timeline-task .task-title {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
+  line-height: 1.1;
 }
 
 .timeline-event .event-meta {
@@ -896,7 +897,7 @@ textarea {
 .task-card.timeline-task {
   border-radius: 4px;
   min-height: 0;
-  padding: 8px;
+  padding: 6px;
 }
 
 .task-card.has-note {
